@@ -2006,6 +2006,25 @@ class MTIPv6ExtHdr(OFPMatchField):
         self.mask = mask
 
 
+@OFPMatchField.register_field_header([ofproto.OXM_OF_TCP_SEQ])
+class MTTCPSeq(OFPMatchField):
+    pack_str = '!H'
+
+    def __init__(self, header, value, mask=None):
+        super(MTTCPSeq, self).__init__(header)
+        self.value = value
+        self.mask = mask
+
+@OFPMatchField.register_field_header([ofproto.OXM_OF_TCP_ACK])
+class MTTCPAck(OFPMatchField):
+    pack_str = '!H'
+
+    def __init__(self, header, value, mask=None):
+        super(MTTCPAck, self).__init__(header)
+        self.value = value
+        self.mask = mask
+
+
 @_register_parser
 @_set_msg_type(ofproto.OFPT_PACKET_IN)
 class OFPPacketIn(MsgBase):
