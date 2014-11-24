@@ -2008,7 +2008,7 @@ class MTIPv6ExtHdr(OFPMatchField):
 
 @OFPMatchField.register_field_header([ofproto.OXM_OF_TCP_SEQ])
 class MTTCPSeq(OFPMatchField):
-    pack_str = '!H'
+    pack_str = '!I'
 
     def __init__(self, header, value, mask=None):
         super(MTTCPSeq, self).__init__(header)
@@ -2017,7 +2017,7 @@ class MTTCPSeq(OFPMatchField):
 
 @OFPMatchField.register_field_header([ofproto.OXM_OF_TCP_ACK])
 class MTTCPAck(OFPMatchField):
-    pack_str = '!H'
+    pack_str = '!I'
 
     def __init__(self, header, value, mask=None):
         super(MTTCPAck, self).__init__(header)
