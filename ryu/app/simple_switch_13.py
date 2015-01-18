@@ -23,6 +23,7 @@ from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
 from ryu.lib.packet import tcp
 from ryu.lib.packet import ipv4
+from ryu.cdnapp.session import Session
 import array
 import pprint
 
@@ -32,7 +33,9 @@ class SimpleSwitch13(app_manager.RyuApp):
 
     def __init__(self, *args, **kwargs):
         super(SimpleSwitch13, self).__init__(*args, **kwargs)
+        self.pp = pprint.PrettyPrinter()
         self.mac_to_port = {}
+        self.sessions = {}
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -52,6 +55,12 @@ class SimpleSwitch13(app_manager.RyuApp):
                                           ofproto.OFPCML_NO_BUFFER)]
         self.add_flow(datapath, 0, match, actions)
 
+        # Match the controller
+        # TODO rewrite IP, from DB or config file
+        match = parser.OFPMatch(eth_type=0x800, ipv4_dst='10.0.0.5', ip_proto=6, tcp_dst=80)
+        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
+        self.add_flow(datapath, 2, match, actions)
+
     def add_flow(self, datapath, priority, match, actions, buffer_id=None):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
@@ -70,6 +79,35 @@ class SimpleSwitch13(app_manager.RyuApp):
 
         datapath.send_msg(mod)
 
+    def manage_cdncomm(self, pkt, ev):
+        msg = ev.msg
+        datapath = msg.datapath
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+        in_port = msg.match['in_port']
+        ipv4dat = pkt.get_protocol(ipv4.ipv4)
+
+        src_ip = ipv4dat.src
+        dst_ip = ipv4dat.dst
+
+        tcpdat = pkt.get_protocol(tcp.tcp)
+
+        # SYN IS SET, MEANS WE ARE DECLARING A NEW SESSION AND STORE THE ORIGINAL PACKET
+        if tcpdat.bits & 0x2:
+            print 'SYN IS SET'
+            sess = Session(src_ip, tcpdat.src_port, pkt)
+            ackpkt = sess.generateACKtoSYN()
+            data = ackpkt.data
+
+            actions = [parser.OFPActionOutput(in_port)]
+            out = parser.OFPPacketOut(datapath=datapath, buffer_id=ofproto.OFP_NO_BUFFER, in_port=ofproto.OFPP_CONTROLLER, actions=actions,
+                                      data=data)
+            datapath.send_msg(out)
+            print 'PUT TO WIRE'
+
+
+
+
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
         # If you hit this you might want to increase
@@ -87,16 +125,18 @@ class SimpleSwitch13(app_manager.RyuApp):
         pkt = packet.Packet(array.array('B', ev.msg.data))
         eth = pkt.get_protocols(ethernet.ethernet)[0]
 
-        tcppkt = pkt.get_protocols(tcp.tcp)
+        ipv4dat = pkt.get_protocol(ipv4.ipv4)
+        if ipv4dat is not None:
+            if ipv4dat.dst == "10.0.0.5":
+                tcpdat = pkt.get_protocol(tcp.tcp)
+                if tcpdat is not None:
+                    if tcpdat.dst_port == 80:
+                        #TODO update
+                        print "we have a incoming TCP packet to port 80 on ip 10.0.0.5"
+                        print msg.match
 
-        print ', '.join('v{}: {}'.format(v, i) for v, i in enumerate(tcppkt))
-
-        fields = msg.match.fields
-
-        for f in fields:
-                if f.header == ofproto_v1_3.OXM_OF_TCP_SEQ:
-                    print f
-
+                        self.manage_cdncomm(pkt, ev)
+                        return
 
         dst = eth.dst
         src = eth.src
@@ -115,7 +155,7 @@ class SimpleSwitch13(app_manager.RyuApp):
             out_port = self.mac_to_port[dpid][dst]
         else:
             out_port = ofproto.OFPP_FLOOD
-            print "flooding packets"
+            print 'flooding packet'
 
         actions = [parser.OFPActionOutput(out_port)]
 
@@ -140,7 +180,6 @@ class SimpleSwitch13(app_manager.RyuApp):
         out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
                                   in_port=in_port, actions=actions, data=data)
         datapath.send_msg(out)
-        print "doing datapath send_msg"
 
 
 
