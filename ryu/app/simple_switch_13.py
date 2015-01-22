@@ -224,14 +224,15 @@ class SimpleSwitch13(app_manager.RyuApp):
 
                 #SRCmatch
                 match = parser.OFPMatch(eth_type=0x800, ipv4_src=sess.srcip, ip_proto=6, tcp_src=sess.srcport)
-                actions = [parser.OFPActionSetField(tcp_ack=1000), parser.OFPActionSetField(ipv4_dst='10.0.0.1'),
+                actions = [parser.OFPActionSetField(tcp_ack=sess.getCounterDiff() - 1), parser.OFPActionSetField(ipv4_dst='10.0.0.1'),
                            parser.OFPActionSetField(eth_dst='08:00:27:f5:a4:ba'),
                            parser.OFPActionOutput(1)]
                 self.add_flow(datapath, 3, match, actions)
 
                 #DSTmatch
                 match = parser.OFPMatch(eth_type=0x800, ipv4_dst=sess.srcip, ip_proto=6, tcp_dst=sess.srcport)
-                actions = [parser.OFPActionSetField(tcp_seq=1000), parser.OFPActionSetField(ipv4_src='10.0.0.5'),
+                tcpseq = 0xffffffff - sess.getCounterDiff() + 2
+                actions = [parser.OFPActionSetField(tcp_seq=tcpseq), parser.OFPActionSetField(ipv4_src='10.0.0.5'),
                            parser.OFPActionSetField(eth_src='00:11:22:33:44:55'),
                            parser.OFPActionOutput(2)]
                 self.add_flow(datapath, 3, match, actions)

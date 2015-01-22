@@ -53,7 +53,7 @@ class Session:
                 src_port = p.dst_port
                 dst_port = p.src_port
                 ack = p.seq + 1
-                seq = 0
+                seq = 1
                 tcpd = tcp.tcp(src_port, dst_port, seq, ack, 0, bits, 65535, 0, 0, None)
 
         p = packet.Packet()
@@ -142,3 +142,6 @@ class Session:
 
     def saveSEseq(self, seq):
         self.seq = seq
+
+    def getCounterDiff(self):
+        return self.seq
