@@ -15,14 +15,14 @@ class Session:
     HTTPGETRECV = 4
 
     # TO CDN ENGINE STATES
-    SYNSENT = 6
-    SYNACKRECV = 7
-    ACKSENT = 8
-    HTTPGETSENT = 9
+    SYNSENT = 5
+    SYNACKRECV = 6
+    ACKSENT = 7
+    HTTPGETSENT = 8
 
     # FINAL STATES
-    SESSIONSJOINED = 10
-    CDNERROR = 11
+    SESSIONSJOINED = 9
+    CDNERROR = 10
 
 
     def __init__(self, srcip, srcport, pkt, rrip):
@@ -30,7 +30,7 @@ class Session:
         self.srcport = srcport
         self.synpkt = pkt
         self.seq = 0
-        self.requestRouterIP = None
+        self.requestRouterIP = rrip
         self.ackpkt = None
         self.requesturi = None
         self.httpgetpkt = None
@@ -125,7 +125,7 @@ class Session:
 
     def setRequestURI(self, uri):
         self.requesturi = uri
-        #TODO calculate best SERVICE ENGINE, SE
+        #TODO GET SE from routing
 
     def getServiceEngine(self):
         #TODO, do real calculation here
@@ -145,3 +145,6 @@ class Session:
 
     def getCounterDiff(self):
         return self.seq
+
+    def getRequestRouterIP(self):
+        return self.requestRouterIP

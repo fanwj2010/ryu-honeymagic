@@ -24,6 +24,7 @@ from ryu.lib.packet import ethernet
 from ryu.lib.packet import tcp
 from ryu.lib.packet import ipv4
 from ryu.cdnapp.session import Session
+from ryu.cdnapp.cdnapp import Cdnapp
 import array
 import pprint
 
@@ -33,9 +34,9 @@ class SimpleSwitch13(app_manager.RyuApp):
 
     def __init__(self, *args, **kwargs):
         super(SimpleSwitch13, self).__init__(*args, **kwargs)
-        self.pp = pprint.PrettyPrinter()
         self.mac_to_port = {}
         self.sessions = {}
+        self.cdn = Cdnapp()
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -55,11 +56,12 @@ class SimpleSwitch13(app_manager.RyuApp):
                                           ofproto.OFPCML_NO_BUFFER)]
         self.add_flow(datapath, 0, match, actions)
 
-        # Match the controller
-        # TODO rewrite IP, from DB or config file
-        match = parser.OFPMatch(eth_type=0x800, ipv4_dst='10.0.0.5', ip_proto=6, tcp_dst=80)
-        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
-        self.add_flow(datapath, 2, match, actions)
+        routers = self.cdn.getRouters()
+        for rkeys in routers.keys():
+            print routers[rkeys]
+            match = parser.OFPMatch(eth_type=0x800, ipv4_dst=routers[rkeys]['ip_address'], ip_proto=6, tcp_dst=80)
+            actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
+            self.add_flow(datapath, 2, match, actions)
 
     def add_flow(self, datapath, priority, match, actions, buffer_id=None):
         ofproto = datapath.ofproto
@@ -92,7 +94,6 @@ class SimpleSwitch13(app_manager.RyuApp):
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
 
         return match, actions
-
 
     def manage_cdncomm(self, pkt, ev):
         msg = ev.msg
