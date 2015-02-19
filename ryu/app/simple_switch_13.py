@@ -37,6 +37,7 @@ class SimpleSwitch13(app_manager.RyuApp):
         self.mac_to_port = {}
         self.sessions = {}
         self.cdn = Cdnapp()
+        self.RequestRouters = []
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -56,9 +57,10 @@ class SimpleSwitch13(app_manager.RyuApp):
                                           ofproto.OFPCML_NO_BUFFER)]
         self.add_flow(datapath, 0, match, actions)
 
-        routers = self.cdn.getRouters()
+        routers = self.cdn.getRequestRouters()
         for rkeys in routers.keys():
-            print routers[rkeys]
+            #Filling up the requestrouters with ip addresses for later easier use.
+            self.RequestRouters.append(routers[rkeys]['ip_address'])
             match = parser.OFPMatch(eth_type=0x800, ipv4_dst=routers[rkeys]['ip_address'], ip_proto=6, tcp_dst=80)
             actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
             self.add_flow(datapath, 2, match, actions)
@@ -262,14 +264,13 @@ class SimpleSwitch13(app_manager.RyuApp):
         pkt = packet.Packet(array.array('B', ev.msg.data))
         eth = pkt.get_protocols(ethernet.ethernet)[0]
 
+        # IF TCP communication, check if it is related to the CDNAPP
         ipv4dat = pkt.get_protocol(ipv4.ipv4)
         tcpdat = pkt.get_protocol(tcp.tcp)
         if ipv4dat is not None:
-            if ipv4dat.dst == "10.0.0.5":           # TODO IP FROM CONFIG FILE OR DB
-
+            if ipv4dat.dst in self.RequestRouters:
                 if tcpdat is not None:
                     if tcpdat.dst_port == 80:
-                        #TODO update
                         self.manage_cdncomm(pkt, ev)
                         return
             else:
@@ -296,7 +297,6 @@ class SimpleSwitch13(app_manager.RyuApp):
             out_port = self.mac_to_port[dpid][dst]
         else:
             out_port = ofproto.OFPP_FLOOD
-            print 'flooding packet'
 
         actions = [parser.OFPActionOutput(out_port)]
 
@@ -308,11 +308,9 @@ class SimpleSwitch13(app_manager.RyuApp):
 
             if msg.buffer_id != ofproto.OFP_NO_BUFFER:
                 self.add_flow(datapath, 1, match, actions, msg.buffer_id)
-                print "adding flow"
                 return
             else:
                 self.add_flow(datapath, 1, match, actions)
-                print "adding flow"
 
         data = None
         if msg.buffer_id == ofproto.OFP_NO_BUFFER:

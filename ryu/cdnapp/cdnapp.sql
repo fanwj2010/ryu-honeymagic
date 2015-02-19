@@ -1,6 +1,6 @@
--- MySQL dump 10.13  Distrib 5.5.41, for debian-linux-gnu (x86_64)
+-- MySQL dump 10.13  Distrib 5.6.19, for osx10.9 (x86_64)
 --
--- Host: localhost    Database: cdnapp
+-- Host: 192.168.56.101    Database: cdnapp
 -- ------------------------------------------------------
 -- Server version	5.5.41-0ubuntu0.14.04.1
 
@@ -51,7 +51,7 @@ CREATE TABLE `domain` (
   `content_origin` varchar(255) COLLATE utf8_slovak_ci NOT NULL,
   `is_enabled` tinyint(4) NOT NULL DEFAULT '1',
   PRIMARY KEY (`domain_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_slovak_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8 COLLATE=utf8_slovak_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -60,6 +60,7 @@ CREATE TABLE `domain` (
 
 LOCK TABLES `domain` WRITE;
 /*!40000 ALTER TABLE `domain` DISABLE KEYS */;
+INSERT INTO `domain` VALUES (1,'cdn.example.com','cdnapp.com',1);
 /*!40000 ALTER TABLE `domain` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -131,7 +132,7 @@ CREATE TABLE `routing` (
   KEY `streaming_engine_id` (`streaming_engine_id`),
   CONSTRAINT `routing_ibfk_1` FOREIGN KEY (`domain_id`) REFERENCES `domain` (`domain_id`) ON DELETE CASCADE ON UPDATE CASCADE,
   CONSTRAINT `routing_ibfk_2` FOREIGN KEY (`streaming_engine_id`) REFERENCES `streaming_engine` (`streaming_engine_id`) ON DELETE CASCADE ON UPDATE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_slovak_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8 COLLATE=utf8_slovak_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -140,6 +141,7 @@ CREATE TABLE `routing` (
 
 LOCK TABLES `routing` WRITE;
 /*!40000 ALTER TABLE `routing` DISABLE KEYS */;
+INSERT INTO `routing` VALUES (2,167772160,4294967040,1,2);
 /*!40000 ALTER TABLE `routing` ENABLE KEYS */;
 UNLOCK TABLES;
 
@@ -183,7 +185,7 @@ CREATE TABLE `streaming_engine` (
   `ip_address` int(10) unsigned NOT NULL,
   `mac_address` varchar(20) COLLATE utf8_slovak_ci NOT NULL,
   PRIMARY KEY (`streaming_engine_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8 COLLATE=utf8_slovak_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8 COLLATE=utf8_slovak_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -192,6 +194,7 @@ CREATE TABLE `streaming_engine` (
 
 LOCK TABLES `streaming_engine` WRITE;
 /*!40000 ALTER TABLE `streaming_engine` DISABLE KEYS */;
+INSERT INTO `streaming_engine` VALUES (2,167772161,'11:22:33:44:55:66');
 /*!40000 ALTER TABLE `streaming_engine` ENABLE KEYS */;
 UNLOCK TABLES;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
@@ -204,4 +207,4 @@ UNLOCK TABLES;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2015-01-20 23:39:47
+-- Dump completed on 2015-02-19 11:52:05
