@@ -25,12 +25,15 @@ class Session:
     CDNERROR = 10
 
 
-    def __init__(self, srcip, srcport, pkt, rrip):
+    def __init__(self, srcip, srcport, pkt, rrip, rrmac):
         self.srcip = srcip
         self.srcport = srcport
         self.synpkt = pkt
         self.seq = 0
         self.requestRouterIP = rrip
+        self.requestRouterMac = rrmac
+        self.serviceEngineIP = None
+        self.serviceEngineMAC = None
         self.ackpkt = None
         self.requesturi = None
         self.httpgetpkt = None
@@ -67,19 +70,16 @@ class Session:
     def getSYNpkt(self):
         return self.synpkt
 
-    #TODO port and destination for SE
-    #def generateSYNpkt(self, dst_ip, dst_port):
-    def generateSYNpkt(self):
+    def generateSYNpkt(self, dst_port=80):
         for p in self.synpkt:
             if p.protocol_name == 'ethernet':
-                eth_dst = '08:00:27:f5:a4:ba'
+                eth_dst = self.serviceEngineMAC
                 e = ethernet.ethernet(eth_dst, p.src)
             if p.protocol_name == 'ipv4':
-                ip_dst = '10.0.0.1'
+                ip_dst = self.serviceEngineIP
                 ip = ipv4.ipv4(4, 5, p.tos, 0, p.identification, p.flags, 0, p.ttl, p.proto, 0, p.src, ip_dst, None)
             if p.protocol_name == 'tcp':
-                #TODO change dstport
-                tcpd = tcp.tcp(p.src_port, p.dst_port, p.seq, p.ack, 0, p.bits, p.window_size, 0, p.urgent, str(bytearray(p.option)))
+                tcpd = tcp.tcp(p.src_port, dst_port, p.seq, p.ack, 0, p.bits, p.window_size, 0, p.urgent, str(bytearray(p.option)))
 
         pkt = packet.Packet()
         pkt.add_protocol(e)
@@ -125,11 +125,6 @@ class Session:
 
     def setRequestURI(self, uri):
         self.requesturi = uri
-        #TODO GET SE from routing
-
-    def getServiceEngine(self):
-        #TODO, do real calculation here
-        return "10.0.0.1"
 
     def setPayload(self, payload):
         self.payload = payload
@@ -146,5 +141,12 @@ class Session:
     def getCounterDiff(self):
         return self.seq
 
-    def getRequestRouterIP(self):
-        return self.requestRouterIP
+    def getRequestRouterIPandMAC(self):
+        return (self.requestRouterIP, self.requestRouterMac)
+
+    def setServiceEngineIPandMAC(self, ipadd, mac):
+        self.serviceEngineIP = ipadd
+        self.serviceEngineMAC = mac
+
+    def getServiceEngineIPandMAC(self):
+        return (self.serviceEngineIP, self.serviceEngineMAC)

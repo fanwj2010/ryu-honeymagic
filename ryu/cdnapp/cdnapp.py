@@ -12,8 +12,6 @@ class Cdnapp:
             self.routers = self.initRequestRouters(conn)
             self.routes = self.initRoutes(conn)
 
-            self.getSeForIP('192.168.111.10')
-
         except mysql.connector.Error as err:
             print err
         else:
@@ -22,7 +20,7 @@ class Cdnapp:
     def initRoutes(self, conn):
         cursor = conn.cursor()
 
-        query = ("SELECT routing.routing_id as id, INET_NTOA(prefix) as prefix, INET_NTOA(mask) as mask, domain_name, content_origin,  "
+        query = ("SELECT routing.routing_id as id, INET_NTOA(prefix) as prefix, INET_NTOA(mask) as mask, domain_name, content_origin, "
                  "INET_NTOA(ip_address) as se_ip, mac_address as se_mac_address FROM `routing` "
                  "JOIN domain AS d ON d.domain_id = routing.domain_id "
                  "JOIN streaming_engine AS s ON s.streaming_engine_id = routing.streaming_engine_id")
@@ -65,10 +63,10 @@ class Cdnapp:
     # Doing longest prefix match for IP and domain
     def getSeForIP(self, requestIP=None, domainName='cdn.example.com'):
 
+        # IF no routes at all in the routing table
         if not self.routes:
             return (None, None)
 
-        #Get specific route for ip and domain'
         maxprefix = 0
 
         matchingroutes = {}

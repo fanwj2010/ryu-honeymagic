@@ -25,8 +25,8 @@ from ryu.lib.packet import tcp
 from ryu.lib.packet import ipv4
 from ryu.cdnapp.session import Session
 from ryu.cdnapp.cdnapp import Cdnapp
+from ryu.cdnapp.exceptions import CustomException, badStateException
 import array
-import pprint
 
 
 class SimpleSwitch13(app_manager.RyuApp):
@@ -59,7 +59,7 @@ class SimpleSwitch13(app_manager.RyuApp):
 
         routers = self.cdn.getRequestRouters()
         for rkeys in routers.keys():
-            #Filling up the requestrouters with ip addresses for later easier use.
+            #Filling up the requestrouters array with ip addresses for later easier use.
             self.RequestRouters.append(routers[rkeys]['ip_address'])
             match = parser.OFPMatch(eth_type=0x800, ipv4_dst=routers[rkeys]['ip_address'], ip_proto=6, tcp_dst=80)
             actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
@@ -83,15 +83,11 @@ class SimpleSwitch13(app_manager.RyuApp):
 
         datapath.send_msg(mod)
 
-    def prepare_match_action(self, pkt, parser, ofproto, direction='to_se'):
+    def prepare_backward_match_action(self, pkt, parser, ofproto):
         ipd = pkt.get_protocol(ipv4.ipv4)
         tcpd = pkt.get_protocol(tcp.tcp)
 
-        if direction == 'to_se':
-            #TODO fix to_se direction
-            match = parser.OFPMatch(eth_type=0x800, ipv4_dst=ipd.src, ip_proto=6, tcp_dst=tcpd.src_port)
-        elif direction == 'from_se':
-            match = parser.OFPMatch(eth_type=0x800, ipv4_dst=ipd.src, ip_proto=6, tcp_dst=tcpd.src_port)
+        match = parser.OFPMatch(eth_type=0x800, ipv4_dst=ipd.src, ip_proto=6, tcp_dst=tcpd.src_port)
 
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
 
@@ -100,9 +96,11 @@ class SimpleSwitch13(app_manager.RyuApp):
     def manage_cdncomm(self, pkt, ev):
         msg = ev.msg
         datapath = msg.datapath
+        dpid = datapath.id
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
         in_port = msg.match['in_port']
+        ethdat = pkt.get_protocol(ethernet.ethernet)
         ipv4dat = pkt.get_protocol(ipv4.ipv4)
 
         src_ip = ipv4dat.src
@@ -115,6 +113,7 @@ class SimpleSwitch13(app_manager.RyuApp):
             if isinstance(p, array.ArrayType):
                 payload = str(bytearray(p))
         # Make sure variable payload is set
+
         try:
             payload
         except NameError:
@@ -122,7 +121,7 @@ class SimpleSwitch13(app_manager.RyuApp):
 
         # SYN IS SET, MEANS WE ARE DECLARING A NEW SESSION AND STORE THE ORIGINAL PACKET. SENDING A SYN ACK RESPONSE
         if tcpdat.bits & 0x2:
-            sess = Session(src_ip, tcpdat.src_port, pkt, dst_ip)
+            sess = Session(src_ip, tcpdat.src_port, pkt, dst_ip, ethdat.dst)
             if src_ip in self.sessions:
                 self.sessions[src_ip][tcpdat.src_port] = sess
             else:
@@ -139,22 +138,21 @@ class SimpleSwitch13(app_manager.RyuApp):
             datapath.send_msg(out)
             sess.setState(Session.SYNACKSENT)
 
+            return
+
         # ACK IS SET
-        #TODO check this condition
         if tcpdat.bits & 1 << 4:
             try:
                 sess = self.sessions[src_ip][tcpdat.src_port]
                 if sess.getState() == Session.SYNACKSENT:
                     # this is probably a ack to SYNACK
-                    # TODO parse, make sure it is a simple ACK for SYNACK
                     if payload is None:
                         sess.saveACKpkt(pkt)
                         sess.setState(Session.ACKRECV)
                         print 'ACK packet saved for our session. Waiting for HTTP GET'
                         return
                     else:
-                        #TODO raise own error, that the state is wrong
-                        print 'raise error here'
+                        raise badStateException('Received ACK with payload in state ' + sess.getState())
                         return
 
                 if sess.getState() == Session.ACKRECV:
@@ -167,34 +165,38 @@ class SimpleSwitch13(app_manager.RyuApp):
                         sess.saveHTTPGETpkt(pkt)
                         sess.setPayload(payload)
 
-                        #TODO get SE and generate synpkt for it
-                        #TODO Install backwards flow mods, so we can catch the returning communication from server
-                        #se = sess.getServiceEngine()
+                        seip, semac = self.cdn.getSeForIP(sess.srcip)
+                        sess.setServiceEngineIPandMAC(seip, semac)
                         synpkt = sess.generateSYNpkt()
 
-                        #TODO flowmod for returning packets, then put it on wire
-                        match, actions = self.prepare_match_action(synpkt, parser, ofproto, 'from_se')
+                        match, actions = self.prepare_backward_match_action(synpkt, parser, ofproto)
 
                         self.add_flow(datapath, 2, match, actions)
 
                         data = synpkt.data
-                        # TODO, get switch port
-                        actions = [parser.OFPActionOutput(1)]
+
+                        #TODO make sure mac address is in this table else create a ARP request ?!
+                        if semac in self.mac_to_port[dpid]:
+                            out_port = self.mac_to_port[dpid][semac]
+
+                        actions = [parser.OFPActionOutput(out_port)]
                         out = parser.OFPPacketOut(datapath=datapath, buffer_id=ofproto.OFP_NO_BUFFER,
                                                   in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=data)
                         datapath.send_msg(out)
                         sess.setState(Session.SYNSENT)
 
                         return
+                    else:
+                        raise badStateException('We did not received ACK with payload in state ' + sess.getState())
 
-            except IndexError:
-                # TODO drop packet
-                print 'No session found'
+            except Exception:
+                print Exception.message
 
     def manage_backward_cdncomm(self, pkt, ev):
         msg = ev.msg
         in_port = msg.match['in_port']
         datapath = msg.datapath
+        dpid = datapath.id
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
@@ -223,26 +225,28 @@ class SimpleSwitch13(app_manager.RyuApp):
                                           in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=data)
                 datapath.send_msg(out)
 
-                #TODO flowmod 2x for seq ip ack mac
+                rrip, rrmac = sess.getRequestRouterIPandMAC()
+                print rrip, rrmac
+                seip, semac = sess.getServiceEngineIPandMAC()
+                print seip, semac
 
-                #SRCmatch
+                #SRCmatch, direction to Service Engine
                 match = parser.OFPMatch(eth_type=0x800, ipv4_src=sess.srcip, ip_proto=6, tcp_src=sess.srcport)
-                actions = [parser.OFPActionSetField(tcp_ack=sess.getCounterDiff() - 1), parser.OFPActionSetField(ipv4_dst='10.0.0.1'),
-                           parser.OFPActionSetField(eth_dst='08:00:27:f5:a4:ba'),
+                actions = [parser.OFPActionSetField(tcp_ack=sess.getCounterDiff() - 1), parser.OFPActionSetField(ipv4_dst=seip),
+                           parser.OFPActionSetField(eth_dst=semac),
                            parser.OFPActionOutput(1)]
                 self.add_flow(datapath, 3, match, actions)
 
-                #DSTmatch
+                #DSTmatch, directino from Service Engine
                 match = parser.OFPMatch(eth_type=0x800, ipv4_dst=sess.srcip, ip_proto=6, tcp_dst=sess.srcport)
                 tcpseq = 0xffffffff - sess.getCounterDiff() + 2
-                actions = [parser.OFPActionSetField(tcp_seq=tcpseq), parser.OFPActionSetField(ipv4_src='10.0.0.5'),
-                           parser.OFPActionSetField(eth_src='00:11:22:33:44:55'),
+                actions = [parser.OFPActionSetField(tcp_seq=tcpseq), parser.OFPActionSetField(ipv4_src=rrip),
+                           parser.OFPActionSetField(eth_src=rrmac),
                            parser.OFPActionOutput(2)]
                 self.add_flow(datapath, 3, match, actions)
 
-
-
                 #TODO send HTTP GET
+                #As soon as dsn server will be up we make this
 
                 return
 
