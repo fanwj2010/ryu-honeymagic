@@ -38,6 +38,7 @@ class Session:
         self.requesturi = None
         self.httpgetpkt = None
         self.synackpkt = None
+        self.clientsrcMac = None
         self.state = self.SYNRECV
 
     #This function is used to generate a SYN, ACK response to a initial SYN request.
@@ -46,6 +47,7 @@ class Session:
             if p.protocol_name == 'ethernet':
                 eth_src = p.dst
                 eth_dst = p.src
+                self.clientsrcMac = p.src
                 e = ethernet.ethernet(eth_dst, eth_src)
             if p.protocol_name == 'ipv4':
                 ip_src = p.dst
@@ -150,3 +152,6 @@ class Session:
 
     def getServiceEngineIPandMAC(self):
         return (self.serviceEngineIP, self.serviceEngineMAC)
+
+    def getClientMac(self):
+        return self.clientsrcMac

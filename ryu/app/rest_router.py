@@ -113,7 +113,7 @@ UDP = udp.udp.__name__
 
 MAX_SUSPENDPACKETS = 50  # Threshold of the packet suspends thread count.
 
-ARP_REPLY_TIMER = 2  # sec
+ARP_REPLY_TIMER = 5  # sec
 OFP_REPLY_TIMER = 1.0  # sec
 CHK_ROUTING_TBL_INTERVAL = 1800  # sec
 
@@ -448,7 +448,8 @@ class Router(dict):
         cookie = COOKIE_DEFAULT_ID
 
         # Set SW config: TTL error packet in (for OFPv1.2/1.3)
-        ofctl.set_sw_config_for_ttl()
+        #This somehow not works on ofsoftswitch TODO why
+        #ofctl.set_sw_config_for_ttl()
 
         # Set flow: ARP handling (packet in)
         priority = get_priority(PRIORITY_ARP_HANDLING)
@@ -737,7 +738,8 @@ class VlanRouter(object):
                          cookie, extra=self.sw_id)
 
         # Set flow: L2 switching (normal)
-        outport = self.ofctl.dp.ofproto.OFPP_NORMAL
+        #outport = self.ofctl.dp.ofproto.OFPP_NORMAL
+        outport = self.ofctl.dp.ofproto.OFPP_CONTROLLER
         priority = self._get_priority(PRIORITY_L2_SWITCHING)
         self.ofctl.set_routing_flow(
             cookie, priority, outport, dl_vlan=self.vlan_id,
@@ -773,6 +775,7 @@ class VlanRouter(object):
         cookie = self._id_to_cookie(REST_VLANID, self.vlan_id)
         priority = self._get_priority(PRIORITY_DEFAULT_ROUTING)
         outport = None  # for drop
+        outport = self.ofctl.dp.ofproto.OFPP_CONTROLLER
         self.ofctl.set_routing_flow(cookie, priority, outport,
                                     dl_vlan=self.vlan_id)
         self.logger.info('Set default route (drop) flow [cookie=0x%x]',
@@ -931,6 +934,7 @@ class VlanRouter(object):
         return relate_list
 
     def packet_in_handler(self, msg, header_list):
+        print 'we have a packeting'
         # Check invalid TTL (for OpenFlow V1.2/1.3)
         ofproto = self.dp.ofproto
         if ofproto.OFP_VERSION == ofproto_v1_2.OFP_VERSION or \
@@ -946,6 +950,8 @@ class VlanRouter(object):
 
         if IPV4 in header_list:
             rt_ports = self.address_data.get_default_gw()
+            print 'packeting goes to ' + header_list[IPV4].dst
+
             if header_list[IPV4].dst in rt_ports:
                 # Packet to router's port.
                 if ICMP in header_list:
@@ -983,7 +989,8 @@ class VlanRouter(object):
 
         if src_ip == dst_ip:
             # GARP -> packet forward (normal)
-            output = self.ofctl.dp.ofproto.OFPP_NORMAL
+            #output = self.ofctl.dp.ofproto.OFPP_NORMAL
+            output = self.ofctl.dp.ofproto.OFPP_CONTROLLER
             self.ofctl.send_packet_out(in_port, output, msg.data)
 
             self.logger.info('Receive GARP from [%s].', srcip,
@@ -995,7 +1002,8 @@ class VlanRouter(object):
             if (dst_addr is not None and
                     src_addr.address_id == dst_addr.address_id):
                 # ARP from internal host -> packet forward (normal)
-                output = self.ofctl.dp.ofproto.OFPP_NORMAL
+                #output = self.ofctl.dp.ofproto.OFPP_NORMAL
+                output = self.ofctl.dp.ofproto.OFPP_CONTROLLER
                 self.ofctl.send_packet_out(in_port, output, msg.data)
 
                 self.logger.info('Receive ARP from an internal host [%s].',
@@ -1095,10 +1103,13 @@ class VlanRouter(object):
                 gw_address = self.address_data.get_data(ip=route.gateway_ip)
                 if gw_address is not None:
                     src_ip = gw_address.default_gw
+                    print 'src ip ' + src_ip
                     dst_ip = route.gateway_ip
+                    print 'dst ip ' + dst_ip
 
         if src_ip is not None:
-            self.packet_buffer.add(in_port, header_list, msg.data)
+            self.packet_buffer.add(in_port, header_list, msg.data, dst_ip)
+            print 'added packet to buffer with with index ' + dst_ip
             self.send_arp_request(src_ip, dst_ip, in_port=in_port)
             self.logger.info('Send ARP request (flood)', extra=self.sw_id)
 
@@ -1400,8 +1411,8 @@ class SuspendPacketList(list):
         super(SuspendPacketList, self).__init__()
         self.timeout_function = timeout_function
 
-    def add(self, in_port, header_list, data):
-        suspend_pkt = SuspendPacket(in_port, header_list, data,
+    def add(self, in_port, header_list, data, dst_ip):
+        suspend_pkt = SuspendPacket(in_port, header_list, data, dst_ip,
                                     self.wait_arp_reply_timer)
         self.append(suspend_pkt)
 
@@ -1428,10 +1439,11 @@ class SuspendPacketList(list):
 
 
 class SuspendPacket(object):
-    def __init__(self, in_port, header_list, data, timer):
+    def __init__(self, in_port, header_list, data, dst_ip, timer):
         super(SuspendPacket, self).__init__()
         self.in_port = in_port
-        self.dst_ip = header_list[IPV4].dst
+        #self.dst_ip = header_list[IPV4].dst
+        self.dst_ip = dst_ip
         self.header_list = header_list
         self.data = data
         # Start ARP reply wait timer.
@@ -1568,7 +1580,8 @@ class OfCtl(object):
         # self.logger.debug('Packet out = %s', data_str, extra=self.sw_id)
 
     def set_normal_flow(self, cookie, priority):
-        out_port = self.dp.ofproto.OFPP_NORMAL
+        #out_port = self.dp.ofproto.OFPP_NORMAL
+        out_port = self.dp.ofproto.OFPP_CONTROLLER
         actions = [self.dp.ofproto_parser.OFPActionOutput(out_port, 0)]
         self.set_flow(cookie, priority, actions=actions)
 
@@ -1653,6 +1666,7 @@ class OfCtl_v1_0(OfCtl):
                                   idle_timeout=idle_timeout,
                                   priority=priority, actions=actions)
         self.dp.send_msg(m)
+
 
     def set_routing_flow(self, cookie, priority, outport, dl_vlan=0,
                          nw_src=0, src_mask=32, nw_dst=0, dst_mask=32,

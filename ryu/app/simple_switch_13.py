@@ -15,7 +15,7 @@
 
 from ryu.base import app_manager
 from ryu.controller import ofp_event
-from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER
+from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, DEAD_DISPATCHER
 from ryu.controller.handler import set_ev_cls
 from ryu.ofproto import ofproto_v1_3
 from ryu.ofproto import ofproto_v1_3_parser
@@ -26,8 +26,10 @@ from ryu.lib.packet import ipv4
 from ryu.cdnapp.session import Session
 from ryu.cdnapp.cdnapp import Cdnapp
 from ryu.cdnapp.exceptions import CustomException, badStateException
+import ryu.controller.dpset
+from ryu.controller.dpset import EventDP
 import array
-
+import pprint
 
 class SimpleSwitch13(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
@@ -191,6 +193,7 @@ class SimpleSwitch13(app_manager.RyuApp):
 
             except Exception:
                 print Exception.message
+                #TODO update state
 
     def manage_backward_cdncomm(self, pkt, ev):
         msg = ev.msg
@@ -204,10 +207,6 @@ class SimpleSwitch13(app_manager.RyuApp):
         tcpdat = pkt.get_protocol(tcp.tcp)
 
         sess = self.sessions[ipd.dst][tcpdat.dst_port]
-
-        print sess
-        print ipd
-        print tcpdat
 
         if sess.getState() == Session.SYNSENT:
             if tcpdat.bits == 1 << 4 | 1 << 1:
@@ -234,7 +233,7 @@ class SimpleSwitch13(app_manager.RyuApp):
                 match = parser.OFPMatch(eth_type=0x800, ipv4_src=sess.srcip, ip_proto=6, tcp_src=sess.srcport)
                 actions = [parser.OFPActionSetField(tcp_ack=sess.getCounterDiff() - 1), parser.OFPActionSetField(ipv4_dst=seip),
                            parser.OFPActionSetField(eth_dst=semac),
-                           parser.OFPActionOutput(1)]
+                           parser.OFPActionOutput(self.mac_to_port[dpid][semac])]
                 self.add_flow(datapath, 3, match, actions)
 
                 #DSTmatch, directino from Service Engine
@@ -242,7 +241,7 @@ class SimpleSwitch13(app_manager.RyuApp):
                 tcpseq = 0xffffffff - sess.getCounterDiff() + 2
                 actions = [parser.OFPActionSetField(tcp_seq=tcpseq), parser.OFPActionSetField(ipv4_src=rrip),
                            parser.OFPActionSetField(eth_src=rrmac),
-                           parser.OFPActionOutput(2)]
+                           parser.OFPActionOutput(self.mac_to_port[dpid][sess.getClientMac()])]
                 self.add_flow(datapath, 3, match, actions)
 
                 #TODO send HTTP GET
@@ -325,4 +324,6 @@ class SimpleSwitch13(app_manager.RyuApp):
         datapath.send_msg(out)
 
 
-
+    @set_ev_cls(EventDP, [MAIN_DISPATCHER, DEAD_DISPATCHER])
+    def _state_change_handler(self, ev):
+        print ev.enter
