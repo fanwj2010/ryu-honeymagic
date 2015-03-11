@@ -48,6 +48,12 @@ from ryu.ofproto import ofproto_v1_0
 from ryu.ofproto import ofproto_v1_2
 from ryu.ofproto import ofproto_v1_3
 
+#Thomas custom imports for the CDNAPP
+from ryu.cdnapp.session import Session
+from ryu.cdnapp.cdnapp import Cdnapp
+from ryu.cdnapp.exceptions import CustomException, badStateException
+
+
 
 # =============================
 #          REST API
@@ -148,6 +154,9 @@ REST_ROUTE = 'route'
 REST_DESTINATION = 'destination'
 REST_GATEWAY = 'gateway'
 
+#CUSTOM REST VARIABLES
+REST_REQUEST_ROUTER = 'request_router'
+
 PRIORITY_VLAN_SHIFT = 1000
 PRIORITY_NETMASK_SHIFT = 32
 
@@ -159,6 +168,7 @@ PRIORITY_STATIC_ROUTING = 2
 PRIORITY_IMPLICIT_ROUTING = 3
 PRIORITY_L2_SWITCHING = 4
 PRIORITY_IP_HANDLING = 5
+PRIORITY_CDN_HANDLING = 6
 
 PRIORITY_TYPE_ROUTE = 'priority_route'
 
@@ -219,6 +229,13 @@ class RestRouterAPI(app_manager.RyuApp):
         # logger configure
         RouterController.set_logger(self.logger)
 
+        ## Thomas cdnapp related variables
+        #TODO initialize requestrouters
+        self.sessions = {}
+        self.cdn = Cdnapp()
+        self.RequestRouters = []
+        # Thomas cdnapp, related variables end
+
         wsgi = kwargs['wsgi']
         self.waiters = {}
         self.data = {'waiters': self.waiters}
@@ -227,6 +244,10 @@ class RestRouterAPI(app_manager.RyuApp):
         wsgi.registory['RouterController'] = self.data
         requirements = {'switch_id': SWITCHID_PATTERN,
                         'vlan_id': VLANID_PATTERN}
+
+        #call to list all the switches
+        #TODO create the mapper for the topologycontroller
+        #TODO create rest calls for the CDN controller
 
         # For no vlan data
         path = '/router/{switch_id}'
@@ -242,6 +263,14 @@ class RestRouterAPI(app_manager.RyuApp):
                        requirements=requirements,
                        action='delete_data',
                        conditions=dict(method=['DELETE']))
+
+        #THOMAS, adding request router to the switch via REST
+        #Request router rest call
+        path = '/cdn/rr/{switch_id}/'
+        mapper.connect('router', path, controller=RouterController,
+                       action='set_rr_data',
+                       conditions=dict(method=['POST']))
+
         # For vlan data
         path = '/router/{switch_id}/{vlan_id}'
         mapper.connect('router', path, controller=RouterController,
@@ -326,6 +355,12 @@ def rest_command(func):
     return _rest_command
 
 
+class TopologyController(ControllerBase):
+    def __init__(self, req, link, data, **config):
+        super(TopologyController, self).__init__(req, link, data, **config)
+        print 'Topologycontroller is initialized'
+
+
 class RouterController(ControllerBase):
 
     _ROUTER_LIST = {}
@@ -407,6 +442,12 @@ class RouterController(ControllerBase):
         return self._access_router(switch_id, vlan_id,
                                    'delete_data', req.body)
 
+    # POST /cdn/rr/{switch_id}
+    @rest_command
+    def set_rr_data(self, req, switch_id, vlan_id, **kwargs):
+        return self._access_router(switch_id, vlan_id,
+                                   'set_rr_data', req.body)
+
     def _access_router(self, switch_id, vlan_id, func, rest_param):
         rest_message = []
         routers = self._get_router(switch_id)
@@ -462,6 +503,13 @@ class Router(dict):
         ofctl.set_normal_flow(cookie, priority)
         self.logger.info('Set L2 switching (normal) flow [cookie=0x%x]',
                          cookie, extra=self.sw_id)
+
+        #TODO read data from DB
+        #TODO migrate to REST
+        priority = get_priority(PRIORITY_CDN_HANDLING)
+        #(self, cookie, priority, eth_type=ether.ETH_TYPE_IP, dst_ip=0, ip_proto=6, tcp_dst=80)
+        ofctl.set_request_router_packetin_flow(cookie, priority, ether.ETH_TYPE_IP, '10.0.0.5', 6, 80)
+        self.logger.info('Set CDN request router packetin flow for request router 10.0.0.5', extra=self.sw_id)
 
         # Set VlanRouter for vid=None.
         vlan_router = VlanRouter(VLANID_NONE, dp, self.port_data, logger)
@@ -543,6 +591,25 @@ class Router(dict):
 
         return {REST_SWITCHID: self.dpid_str,
                 REST_COMMAND_RESULT: msgs}
+
+    def set_rr_data(self, vlan_id, param, waiters):
+        vlan_routers = self._get_vlan_router(vlan_id)
+        if not vlan_routers:
+            vlan_routers = [self._add_vlan_router(vlan_id)]
+
+        msgs = []
+        for vlan_router in vlan_routers:
+            try:
+                msg = vlan_router.set_rr_data(param)
+                msgs.append(msg)
+                if msg[REST_RESULT] == REST_NG:
+                    # Data setting is failure.
+                    self._del_vlan_router(vlan_router.vlan_id, waiters)
+            except ValueError as err_msg:
+                # Data setting is failure.
+                self._del_vlan_router(vlan_router.vlan_id, waiters)
+                raise err_msg
+
 
     def delete_data(self, vlan_id, param, waiters):
         msgs = []
@@ -713,6 +780,25 @@ class VlanRouter(object):
         else:
             raise ValueError('Invalid parameter.')
 
+    #THOMAS
+    #TODO check
+    def set_rr_data(self, data):
+        details = None
+
+        try:
+            if REST_REQUEST_ROUTER in data:
+                req_router = data[REST_REQUEST_ROUTER]
+                #TODO get RR address id
+                self._set_request_router_address_data(req_router)
+        except CommandFailure as err_msg:
+            msg = {REST_RESULT: REST_NG, REST_DETAILS: str(err_msg)}
+            return self._response(msg)
+        if details is not None:
+            msg = {REST_RESULT: REST_OK, REST_DETAILS: details}
+            return self._response(msg)
+        else:
+            raise ValueError('Invalid parameter.')
+
     def _set_address_data(self, address):
         address = self.address_data.add(address)
 
@@ -770,6 +856,14 @@ class VlanRouter(object):
             self._set_route_packetin(route)
             self.send_arp_request(src_ip, dst_ip)
             return route.route_id
+
+    #TODO, check and check where to save the IP according to the other implementation like routing and address
+    def _set_request_router_address_data(self, rr_address):
+        err_msg = 'Invalid [%s] value.' % REST_REQUEST_ROUTER
+        rr_ip = ip_addr_aton(rr_address, err_msg=err_msg)
+        #TODO check, if already in use by this router
+
+
 
     def _set_defaultroute_drop(self):
         cookie = self._id_to_cookie(REST_VLANID, self.vlan_id)
@@ -958,6 +1052,8 @@ class VlanRouter(object):
                 elif TCP in header_list or UDP in header_list:
                     self._packetin_tcp_udp(msg, header_list)
                     return
+#            elif header_list[IPV4].dst in self.:
+##TODO
             else:
                 # Packet to internal host or gateway router.
                 self._packetin_to_node(msg, header_list)
@@ -1106,6 +1202,7 @@ class VlanRouter(object):
             self.packet_buffer.add(in_port, header_list, msg.data, dst_ip)
             self.send_arp_request(src_ip, dst_ip, in_port=in_port)
             self.logger.info('Send ARP request (flood)', extra=self.sw_id)
+        print 'src_ip is probably None'
 
     def _packetin_invalid_ttl(self, msg, header_list):
         # Send ICMP TTL error.
@@ -1776,6 +1873,26 @@ class OfCtl_after_v1_2(OfCtl):
                       nw_src=nw_src, src_mask=src_mask,
                       nw_dst=nw_dst, dst_mask=dst_mask,
                       idle_timeout=idle_timeout, actions=actions)
+
+    #TODO check if flow is added for the request router
+    #THOMAS, added new function for adding packetin flow for the request routers
+    def set_request_router_packetin_flow(self, cookie, priority, eth_type=ether.ETH_TYPE_IP, dst_ip=0, ip_proto=6, tcp_dst=80):
+        ofp = self.dp.ofproto
+        ofp_parser = self.dp.ofproto_parser
+
+        cmd = ofp.OFPFC_ADD
+        idle_timeout = 0
+
+        actions = [ofp_parser.OFPActionOutput(ofp.OFPP_CONTROLLER, ofp.OFPCML_NO_BUFFER)]
+        match = ofp_parser.OFPMatch(eth_type=eth_type, ipv4_dst=dst_ip, ip_proto=ip_proto, tcp_dst=tcp_dst)
+
+        inst = [ofp_parser.OFPInstructionActions(ofp.OFPIT_APPLY_ACTIONS, actions)]
+
+        m = ofp_parser.OFPFlowMod(self.dp, cookie, 0, 0, cmd, idle_timeout,
+                                  0, priority, UINT32_MAX, ofp.OFPP_ANY,
+                                  ofp.OFPG_ANY, 0, match, inst)
+        self.dp.send_msg(m)
+
 
     def delete_flow(self, flow_stats):
         ofp = self.dp.ofproto
