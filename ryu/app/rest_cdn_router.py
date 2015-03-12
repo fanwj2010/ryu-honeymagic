@@ -508,8 +508,8 @@ class Router(dict):
         #TODO migrate to REST
         priority = get_priority(PRIORITY_CDN_HANDLING)
         #(self, cookie, priority, eth_type=ether.ETH_TYPE_IP, dst_ip=0, ip_proto=6, tcp_dst=80)
-        ofctl.set_request_router_packetin_flow(cookie, priority, ether.ETH_TYPE_IP, '10.0.0.5', 6, 80)
-        self.logger.info('Set CDN request router packetin flow for request router 10.0.0.5', extra=self.sw_id)
+        #ofctl.set_request_router_packetin_flow(cookie, priority, ether.ETH_TYPE_IP, '10.0.0.5', 6, 80)
+        #self.logger.info('Set CDN request router packetin flow for request router 10.0.0.5', extra=self.sw_id)
 
         # Set VlanRouter for vid=None.
         vlan_router = VlanRouter(VLANID_NONE, dp, self.port_data, logger)
@@ -862,8 +862,12 @@ class VlanRouter(object):
         err_msg = 'Invalid [%s] value.' % REST_REQUEST_ROUTER
         rr_ip = ip_addr_aton(rr_address, err_msg=err_msg)
         #TODO check, if already in use by this router
+        self._set_request_router_packetin(rr_ip)
 
-
+    def _set_request_router_packetin(self, rr_address):
+        priority = self._get_priority(PRIORITY_CDN_HANDLING)
+        cookie = 0
+        self.ofctl.set_request_router_packetin_flow(cookie, priority, ether.ETH_TYPE_IP, rr_address, 6, 80)
 
     def _set_defaultroute_drop(self):
         cookie = self._id_to_cookie(REST_VLANID, self.vlan_id)
