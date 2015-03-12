@@ -266,7 +266,7 @@ class RestRouterAPI(app_manager.RyuApp):
 
         #THOMAS, adding request router to the switch via REST
         #Request router rest call
-        path = '/cdn/rr/{switch_id}/'
+        path = '/cdn/rr/{switch_id}'
         mapper.connect('router', path, controller=RouterController,
                        action='set_rr_data',
                        conditions=dict(method=['POST']))
@@ -444,8 +444,8 @@ class RouterController(ControllerBase):
 
     # POST /cdn/rr/{switch_id}
     @rest_command
-    def set_rr_data(self, req, switch_id, vlan_id, **kwargs):
-        return self._access_router(switch_id, vlan_id,
+    def set_rr_data(self, req, switch_id, **kwargs):
+        return self._access_router(switch_id, VLANID_NONE,
                                    'set_rr_data', req.body)
 
     def _access_router(self, switch_id, vlan_id, func, rest_param):
@@ -609,6 +609,9 @@ class Router(dict):
                 # Data setting is failure.
                 self._del_vlan_router(vlan_router.vlan_id, waiters)
                 raise err_msg
+
+        return {REST_SWITCHID: self.dpid_str,
+                REST_COMMAND_RESULT: msgs}
 
 
     def delete_data(self, vlan_id, param, waiters):
@@ -781,15 +784,13 @@ class VlanRouter(object):
             raise ValueError('Invalid parameter.')
 
     #THOMAS
-    #TODO check
     def set_rr_data(self, data):
         details = None
-
         try:
             if REST_REQUEST_ROUTER in data:
                 req_router = data[REST_REQUEST_ROUTER]
-                #TODO get RR address id
                 self._set_request_router_address_data(req_router)
+                details = 'Add request router [id=1]' #TODO generate ID
         except CommandFailure as err_msg:
             msg = {REST_RESULT: REST_NG, REST_DETAILS: str(err_msg)}
             return self._response(msg)
@@ -859,6 +860,7 @@ class VlanRouter(object):
 
     #TODO, check and check where to save the IP according to the other implementation like routing and address
     def _set_request_router_address_data(self, rr_address):
+        #TODO logs here or to a different place
         err_msg = 'Invalid [%s] value.' % REST_REQUEST_ROUTER
         rr_ip = ip_addr_aton(rr_address, err_msg=err_msg)
         #TODO check, if already in use by this router
