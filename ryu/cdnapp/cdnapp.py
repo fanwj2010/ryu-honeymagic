@@ -92,5 +92,3 @@ class Cdnapp:
         return (firstroute['se_ip'], firstroute['se_mac_address'])
 
 
-
-

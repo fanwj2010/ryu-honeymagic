@@ -53,12 +53,6 @@ from ryu.cdnapp.session import Session
 from ryu.cdnapp.cdnapp import Cdnapp
 from ryu.cdnapp.exceptions import CustomException, badStateException
 
-from ryu.app.VlanRouterUtils import PortData, Port, AddressData, Address, RoutingTable, Route, \
-    SuspendPacketList, SuspendPacket, RequestRouterTable
-
-from ryu.app.VlanRouterOFCTL import OfCtl, OfCtl_after_v1_2, OfCtl_v1_0, OfCtl_v1_2, OfCtl_v1_3
-
-import array
 
 
 # =============================
@@ -235,6 +229,13 @@ class RestRouterAPI(app_manager.RyuApp):
         # logger configure
         RouterController.set_logger(self.logger)
 
+        ## Thomas cdnapp related variables
+        #TODO initialize requestrouters
+        self.sessions = {}
+        self.cdn = Cdnapp()
+        self.RequestRouters = []
+        # Thomas cdnapp, related variables end
+
         wsgi = kwargs['wsgi']
         self.waiters = {}
         self.data = {'waiters': self.waiters}
@@ -265,7 +266,7 @@ class RestRouterAPI(app_manager.RyuApp):
 
         #THOMAS, adding request router to the switch via REST
         #Request router rest call
-        path = '/cdn/rr/{switch_id}'
+        path = '/cdn/rr/{switch_id}/'
         mapper.connect('router', path, controller=RouterController,
                        action='set_rr_data',
                        conditions=dict(method=['POST']))
@@ -443,8 +444,8 @@ class RouterController(ControllerBase):
 
     # POST /cdn/rr/{switch_id}
     @rest_command
-    def set_rr_data(self, req, switch_id, **kwargs):
-        return self._access_router(switch_id, VLANID_NONE,
+    def set_rr_data(self, req, switch_id, vlan_id, **kwargs):
+        return self._access_router(switch_id, vlan_id,
                                    'set_rr_data', req.body)
 
     def _access_router(self, switch_id, vlan_id, func, rest_param):
@@ -488,7 +489,7 @@ class Router(dict):
         cookie = COOKIE_DEFAULT_ID
 
         # Set SW config: TTL error packet in (for OFPv1.2/1.3)
-        #This somehow not works on ofsoftswitch TODO why, cuz its shit
+        #This somehow not works on ofsoftswitch TODO why
         #ofctl.set_sw_config_for_ttl()
 
         # Set flow: ARP handling (packet in)
@@ -502,6 +503,13 @@ class Router(dict):
         ofctl.set_normal_flow(cookie, priority)
         self.logger.info('Set L2 switching (normal) flow [cookie=0x%x]',
                          cookie, extra=self.sw_id)
+
+        #TODO read data from DB
+        #TODO migrate to REST
+        priority = get_priority(PRIORITY_CDN_HANDLING)
+        #(self, cookie, priority, eth_type=ether.ETH_TYPE_IP, dst_ip=0, ip_proto=6, tcp_dst=80)
+        ofctl.set_request_router_packetin_flow(cookie, priority, ether.ETH_TYPE_IP, '10.0.0.5', 6, 80)
+        self.logger.info('Set CDN request router packetin flow for request router 10.0.0.5', extra=self.sw_id)
 
         # Set VlanRouter for vid=None.
         vlan_router = VlanRouter(VLANID_NONE, dp, self.port_data, logger)
@@ -602,9 +610,6 @@ class Router(dict):
                 self._del_vlan_router(vlan_router.vlan_id, waiters)
                 raise err_msg
 
-        return {REST_SWITCHID: self.dpid_str,
-                REST_COMMAND_RESULT: msgs}
-
 
     def delete_data(self, vlan_id, param, waiters):
         msgs = []
@@ -627,7 +632,6 @@ class Router(dict):
         pkt = packet.Packet(msg.data)
         # TODO: Packet library convert to string
         # self.logger.debug('Packet in = %s', str(pkt), self.sw_id)
-        #TODO probably this does not parse the payload of the packet THOMAS qwerty
         header_list = dict((p.protocol_name, p)
                            for p in pkt.protocols if type(p) != str)
         if header_list:
@@ -666,8 +670,6 @@ class VlanRouter(object):
         self.routing_tbl = RoutingTable()
         self.packet_buffer = SuspendPacketList(self.send_icmp_unreach_error)
         self.ofctl = OfCtl.factory(dp, logger)
-        self.request_routers = RequestRouterTable()
-        self.sessions = {}
 
         # Set flow: default route (drop)
         self._set_defaultroute_drop()
@@ -779,13 +781,15 @@ class VlanRouter(object):
             raise ValueError('Invalid parameter.')
 
     #THOMAS
+    #TODO check
     def set_rr_data(self, data):
         details = None
+
         try:
             if REST_REQUEST_ROUTER in data:
                 req_router = data[REST_REQUEST_ROUTER]
-                req_router_id = self._set_request_router_address_data(req_router)
-                details = 'Added request router [id=%d]' % req_router_id
+                #TODO get RR address id
+                self._set_request_router_address_data(req_router)
         except CommandFailure as err_msg:
             msg = {REST_RESULT: REST_NG, REST_DETAILS: str(err_msg)}
             return self._response(msg)
@@ -857,15 +861,9 @@ class VlanRouter(object):
     def _set_request_router_address_data(self, rr_address):
         err_msg = 'Invalid [%s] value.' % REST_REQUEST_ROUTER
         rr_ip = ip_addr_aton(rr_address, err_msg=err_msg)
-        req_router = self.request_routers.add(rr_ip)
-        self._set_request_router_packetin(rr_ip)
-        self.logger.info('Set request router packet in flow for CDN for [dst_ip=%s]', rr_ip, extra=self.sw_id)
-        return req_router
+        #TODO check, if already in use by this router
 
-    def _set_request_router_packetin(self, rr_address):
-        priority = self._get_priority(PRIORITY_CDN_HANDLING)
-        cookie = 0
-        self.ofctl.set_request_router_packetin_flow(cookie, priority, ether.ETH_TYPE_IP, rr_address, 6, 80)
+
 
     def _set_defaultroute_drop(self):
         cookie = self._id_to_cookie(REST_VLANID, self.vlan_id)
@@ -1044,10 +1042,7 @@ class VlanRouter(object):
             return
 
         if IPV4 in header_list:
-            print 'ipv4 is in header list'
             rt_ports = self.address_data.get_default_gw()
-            print(self.request_routers)
-            rr_ports = self.request_routers
             if header_list[IPV4].dst in rt_ports:
                 # Packet to router's port.
                 if ICMP in header_list:
@@ -1057,15 +1052,8 @@ class VlanRouter(object):
                 elif TCP in header_list or UDP in header_list:
                     self._packetin_tcp_udp(msg, header_list)
                     return
-            elif header_list[IPV4].dst in rr_ports.keys():
-                print 'wohoooo we are doing shit with the request routers IP yeah'
-                print header_list
-                self.manage_cdncomm(msg)
-
-#QWERTY
-
-
-##TODO check here if the communication is for the request rotuer...all that shit begins here.
+#            elif header_list[IPV4].dst in self.:
+##TODO
             else:
                 # Packet to internal host or gateway router.
                 self._packetin_to_node(msg, header_list)
@@ -1214,7 +1202,7 @@ class VlanRouter(object):
             self.packet_buffer.add(in_port, header_list, msg.data, dst_ip)
             self.send_arp_request(src_ip, dst_ip, in_port=in_port)
             self.logger.info('Send ARP request (flood)', extra=self.sw_id)
-
+        print 'src_ip is probably None'
 
     def _packetin_invalid_ttl(self, msg, header_list):
         # Send ICMP TTL error.
@@ -1346,107 +1334,638 @@ class VlanRouter(object):
         return None
 
 
-    def manage_cdncomm(self, msg):
-        pkt = packet.Packet(array.array('B', msg.data))
-        datapath = msg.datapath
-        dpid = datapath.id
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
-        in_port = msg.match['in_port']
-        ethdat = pkt.get_protocol(ethernet.ethernet)
-        ipv4dat = pkt.get_protocol(ipv4.ipv4)
+class PortData(dict):
+    def __init__(self, ports):
+        super(PortData, self).__init__()
+        for port in ports.values():
+            data = Port(port.port_no, port.hw_addr)
+            self[port.port_no] = data
 
-        src_ip = ipv4dat.src
-        dst_ip = ipv4dat.dst
 
-        tcpdat = pkt.get_protocol(tcp.tcp)
+class Port(object):
+    def __init__(self, port_no, hw_addr):
+        super(Port, self).__init__()
+        self.port_no = port_no
+        self.mac = hw_addr
 
-        # Parsing of packet and getting payload
-        for p in pkt:
-            if isinstance(p, array.ArrayType):
-                payload = str(bytearray(p))
 
-        # Make sure variable payload is set
-        try:
-            payload
-        except NameError:
-            payload = None
+class AddressData(dict):
+    def __init__(self):
+        super(AddressData, self).__init__()
+        self.address_id = 1
 
-        # SYN IS SET, MEANS WE ARE DECLARING A NEW SESSION AND STORE THE ORIGINAL PACKET. SENDING A SYN ACK RESPONSE
-        if tcpdat.bits & 0x2:
-            sess = Session(src_ip, tcpdat.src_port, pkt, dst_ip, ethdat.dst)
-            if src_ip in self.sessions:
-                self.sessions[src_ip][tcpdat.src_port] = sess
+    def add(self, address):
+        err_msg = 'Invalid [%s] value.' % REST_ADDRESS
+        nw_addr, mask, default_gw = nw_addr_aton(address, err_msg=err_msg)
+
+        # Check overlaps
+        for other in self.values():
+            other_mask = mask_ntob(other.netmask)
+            add_mask = mask_ntob(mask, err_msg=err_msg)
+            if (other.nw_addr == ipv4_apply_mask(default_gw, other.netmask) or
+                    nw_addr == ipv4_apply_mask(other.default_gw, mask,
+                                               err_msg)):
+                msg = 'Address overlaps [address_id=%d]' % other.address_id
+                raise CommandFailure(msg=msg)
+
+        address = Address(self.address_id, nw_addr, mask, default_gw)
+        ip_str = ip_addr_ntoa(nw_addr)
+        key = '%s/%d' % (ip_str, mask)
+        self[key] = address
+
+        self.address_id += 1
+        self.address_id &= UINT32_MAX
+        if self.address_id == COOKIE_DEFAULT_ID:
+            self.address_id = 1
+
+        return address
+
+    def delete(self, address_id):
+        for key, value in self.items():
+            if value.address_id == address_id:
+                del self[key]
+                return
+
+    def get_default_gw(self):
+        return [address.default_gw for address in self.values()]
+
+    def get_data(self, addr_id=None, ip=None):
+        for address in self.values():
+            if addr_id is not None:
+                if addr_id == address.address_id:
+                    return address
             else:
-                self.sessions[src_ip] = {}
-                self.sessions[src_ip][tcpdat.src_port] = sess
-
-            #Generating ACK response to the TCP SYN
-            ackpkt = sess.generateACKtoSYN()
-            data = ackpkt.data
-
-            actions = [parser.OFPActionOutput(in_port)]
-            out = parser.OFPPacketOut(datapath=datapath, buffer_id=ofproto.OFP_NO_BUFFER,
-                                      in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=data)
-            datapath.send_msg(out)
-            sess.setState(Session.SYNACKSENT)
-            return
-
-        # ACK IS SET
-        if tcpdat.bits & 1 << 4:
-            try:
-                sess = self.sessions[src_ip][tcpdat.src_port]
-                if sess.getState() == Session.SYNACKSENT:
-                    # this is probably a ack to SYNACK
-                    if payload is None:
-                        sess.saveACKpkt(pkt)
-                        sess.setState(Session.ACKRECV)
-                        print 'ACK packet saved for our session. Waiting for HTTP GET'
-                        return
-                    else:
-                        raise badStateException('Received ACK with payload in state ' + sess.getState())
-                        return
-
-                if sess.getState() == Session.ACKRECV:
-                    # We should catch HTTP GET now
-                    if payload is not None:
-                        request = payload.split('\n', 1)[0]
-                        print 'Request is ', request
-                        sess.setState(Session.HTTPGETRECV)
-                        sess.setRequestURI(request)
-                        sess.saveHTTPGETpkt(pkt)
-                        sess.setPayload(payload)
-
-                        seip, semac = self.cdn.getSeForIP(sess.srcip)
-                        sess.setServiceEngineIPandMAC(seip, semac)
-                        synpkt = sess.generateSYNpkt()
-
-                        match, actions = self.prepare_backward_match_action(synpkt, parser, ofproto)
-
-                        self.add_flow(datapath, 2, match, actions)
-
-                        data = synpkt.data
-
-                        #TODO make sure mac address is in this table else create a ARP request ?!
-                        if semac in self.mac_to_port[dpid]:
-                            out_port = self.mac_to_port[dpid][semac]
-
-                        actions = [parser.OFPActionOutput(out_port)]
-                        out = parser.OFPPacketOut(datapath=datapath, buffer_id=ofproto.OFP_NO_BUFFER,
-                                                  in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=data)
-                        datapath.send_msg(out)
-                        sess.setState(Session.SYNSENT)
-
-                        return
-                    else:
-                        raise badStateException('We did not received ACK with payload in state ' + sess.getState())
-
-            except Exception:
-                print Exception.message
-                #TODO update state
+                assert ip is not None
+                if ipv4_apply_mask(ip, address.netmask) == address.nw_addr:
+                    return address
+        return None
 
 
+class Address(object):
+    def __init__(self, address_id, nw_addr, netmask, default_gw):
+        super(Address, self).__init__()
+        self.address_id = address_id
+        self.nw_addr = nw_addr
+        self.netmask = netmask
+        self.default_gw = default_gw
 
+    def __contains__(self, ip):
+        return bool(ipv4_apply_mask(ip, self.netmask) == self.nw_addr)
+
+
+class RoutingTable(dict):
+    def __init__(self):
+        super(RoutingTable, self).__init__()
+        self.route_id = 1
+
+    def add(self, dst_nw_addr, gateway_ip):
+        err_msg = 'Invalid [%s] value.'
+
+        if dst_nw_addr == DEFAULT_ROUTE:
+            dst_ip = 0
+            netmask = 0
+        else:
+            dst_ip, netmask, dummy = nw_addr_aton(
+                dst_nw_addr, err_msg=err_msg % REST_DESTINATION)
+
+        gateway_ip = ip_addr_aton(gateway_ip, err_msg=err_msg % REST_GATEWAY)
+
+        # Check overlaps
+        overlap_route = None
+        if dst_nw_addr == DEFAULT_ROUTE:
+            if DEFAULT_ROUTE in self:
+                overlap_route = self[DEFAULT_ROUTE].route_id
+        elif dst_nw_addr in self:
+            overlap_route = self[dst_nw_addr].route_id
+
+        if overlap_route is not None:
+            msg = 'Destination overlaps [route_id=%d]' % overlap_route
+            raise CommandFailure(msg=msg)
+
+        routing_data = Route(self.route_id, dst_ip, netmask, gateway_ip)
+        ip_str = ip_addr_ntoa(dst_ip)
+        key = '%s/%d' % (ip_str, netmask)
+        self[key] = routing_data
+
+        self.route_id += 1
+        self.route_id &= UINT32_MAX
+        if self.route_id == COOKIE_DEFAULT_ID:
+            self.route_id = 1
+
+        return routing_data
+
+    def delete(self, route_id):
+        for key, value in self.items():
+            if value.route_id == route_id:
+                del self[key]
+                return
+
+    def get_gateways(self):
+        return [routing_data.gateway_ip for routing_data in self.values()]
+
+    def get_data(self, gw_mac=None, dst_ip=None):
+        if gw_mac is not None:
+            for route in self.values():
+                if gw_mac == route.gateway_mac:
+                    return route
+            return None
+
+        elif dst_ip is not None:
+            get_route = None
+            mask = 0
+            for route in self.values():
+                if ipv4_apply_mask(dst_ip, route.netmask) == route.dst_ip:
+                    # For longest match
+                    if mask < route.netmask:
+                        get_route = route
+                        mask = route.netmask
+
+            if get_route is None:
+                get_route = self.get(DEFAULT_ROUTE, None)
+            return get_route
+        else:
+            return None
+
+
+class Route(object):
+    def __init__(self, route_id, dst_ip, netmask, gateway_ip):
+        super(Route, self).__init__()
+        self.route_id = route_id
+        self.dst_ip = dst_ip
+        self.netmask = netmask
+        self.gateway_ip = gateway_ip
+        self.gateway_mac = None
+
+
+class SuspendPacketList(list):
+    def __init__(self, timeout_function):
+        super(SuspendPacketList, self).__init__()
+        self.timeout_function = timeout_function
+
+    def add(self, in_port, header_list, data, dst_ip):
+        suspend_pkt = SuspendPacket(in_port, header_list, data, dst_ip,
+                                    self.wait_arp_reply_timer)
+        self.append(suspend_pkt)
+
+    def delete(self, pkt=None, del_addr=None):
+        if pkt is not None:
+            del_list = [pkt]
+        else:
+            assert del_addr is not None
+            del_list = [pkt for pkt in self if pkt.dst_ip in del_addr]
+
+        for pkt in del_list:
+            self.remove(pkt)
+            hub.kill(pkt.wait_thread)
+            pkt.wait_thread.wait()
+
+    def get_data(self, dst_ip):
+        return [pkt for pkt in self if pkt.dst_ip == dst_ip]
+
+    def wait_arp_reply_timer(self, suspend_pkt):
+        hub.sleep(ARP_REPLY_TIMER)
+        if suspend_pkt in self:
+            self.timeout_function(suspend_pkt)
+            self.delete(pkt=suspend_pkt)
+
+
+class SuspendPacket(object):
+    def __init__(self, in_port, header_list, data, dst_ip, timer):
+        super(SuspendPacket, self).__init__()
+        self.in_port = in_port
+        #self.dst_ip = header_list[IPV4].dst
+        self.dst_ip = dst_ip
+        self.header_list = header_list
+        self.data = data
+        # Start ARP reply wait timer.
+        self.wait_thread = hub.spawn(timer, self)
+
+
+class OfCtl(object):
+    _OF_VERSIONS = {}
+
+    @staticmethod
+    def register_of_version(version):
+        def _register_of_version(cls):
+            OfCtl._OF_VERSIONS.setdefault(version, cls)
+            return cls
+        return _register_of_version
+
+    @staticmethod
+    def factory(dp, logger):
+        of_version = dp.ofproto.OFP_VERSION
+        if of_version in OfCtl._OF_VERSIONS:
+            ofctl = OfCtl._OF_VERSIONS[of_version](dp, logger)
+        else:
+            raise OFPUnknownVersion(version=of_version)
+
+        return ofctl
+
+    def __init__(self, dp, logger):
+        super(OfCtl, self).__init__()
+        self.dp = dp
+        self.sw_id = {'sw_id': dpid_lib.dpid_to_str(dp.id)}
+        self.logger = logger
+
+    def set_sw_config_for_ttl(self):
+        # OpenFlow v1_2/1_3.
+        pass
+
+    def set_flow(self, cookie, priority, dl_type=0, dl_dst=0, dl_vlan=0,
+                 nw_src=0, src_mask=32, nw_dst=0, dst_mask=32,
+                 nw_proto=0, idle_timeout=0, actions=None):
+        # Abstract method
+        raise NotImplementedError()
+
+    def send_arp(self, arp_opcode, vlan_id, src_mac, dst_mac,
+                 src_ip, dst_ip, arp_target_mac, in_port, output):
+        # Generate ARP packet
+        if vlan_id != VLANID_NONE:
+            ether_proto = ether.ETH_TYPE_8021Q
+            pcp = 0
+            cfi = 0
+            vlan_ether = ether.ETH_TYPE_ARP
+            v = vlan.vlan(pcp, cfi, vlan_id, vlan_ether)
+        else:
+            ether_proto = ether.ETH_TYPE_ARP
+        hwtype = 1
+        arp_proto = ether.ETH_TYPE_IP
+        hlen = 6
+        plen = 4
+
+        pkt = packet.Packet()
+        e = ethernet.ethernet(dst_mac, src_mac, ether_proto)
+        a = arp.arp(hwtype, arp_proto, hlen, plen, arp_opcode,
+                    src_mac, src_ip, arp_target_mac, dst_ip)
+        pkt.add_protocol(e)
+        if vlan_id != VLANID_NONE:
+            pkt.add_protocol(v)
+        pkt.add_protocol(a)
+        pkt.serialize()
+
+        # Send packet out
+        self.send_packet_out(in_port, output, pkt.data, data_str=str(pkt))
+
+    def send_icmp(self, in_port, protocol_list, vlan_id, icmp_type,
+                  icmp_code, icmp_data=None, msg_data=None, src_ip=None):
+        # Generate ICMP reply packet
+        csum = 0
+        offset = ethernet.ethernet._MIN_LEN
+
+        if vlan_id != VLANID_NONE:
+            ether_proto = ether.ETH_TYPE_8021Q
+            pcp = 0
+            cfi = 0
+            vlan_ether = ether.ETH_TYPE_IP
+            v = vlan.vlan(pcp, cfi, vlan_id, vlan_ether)
+            offset += vlan.vlan._MIN_LEN
+        else:
+            ether_proto = ether.ETH_TYPE_IP
+
+        eth = protocol_list[ETHERNET]
+        e = ethernet.ethernet(eth.src, eth.dst, ether_proto)
+
+        if icmp_data is None and msg_data is not None:
+            ip_datagram = msg_data[offset:]
+            if icmp_type == icmp.ICMP_DEST_UNREACH:
+                icmp_data = icmp.dest_unreach(data_len=len(ip_datagram),
+                                              data=ip_datagram)
+            elif icmp_type == icmp.ICMP_TIME_EXCEEDED:
+                icmp_data = icmp.TimeExceeded(data_len=len(ip_datagram),
+                                              data=ip_datagram)
+
+        ic = icmp.icmp(icmp_type, icmp_code, csum, data=icmp_data)
+
+        ip = protocol_list[IPV4]
+        if src_ip is None:
+            src_ip = ip.dst
+        ip_total_length = ip.header_length * 4 + ic._MIN_LEN
+        if ic.data is not None:
+            ip_total_length += ic.data._MIN_LEN
+            if ic.data.data is not None:
+                ip_total_length += + len(ic.data.data)
+        i = ipv4.ipv4(ip.version, ip.header_length, ip.tos,
+                      ip_total_length, ip.identification, ip.flags,
+                      ip.offset, DEFAULT_TTL, inet.IPPROTO_ICMP, csum,
+                      src_ip, ip.src)
+
+        pkt = packet.Packet()
+        pkt.add_protocol(e)
+        if vlan_id != VLANID_NONE:
+            pkt.add_protocol(v)
+        pkt.add_protocol(i)
+        pkt.add_protocol(ic)
+        pkt.serialize()
+
+        # Send packet out
+        self.send_packet_out(in_port, self.dp.ofproto.OFPP_IN_PORT,
+                             pkt.data, data_str=str(pkt))
+
+    def send_packet_out(self, in_port, output, data, data_str=None):
+        actions = [self.dp.ofproto_parser.OFPActionOutput(output, 0)]
+        self.dp.send_packet_out(buffer_id=UINT32_MAX, in_port=in_port,
+                                actions=actions, data=data)
+        # TODO: Packet library convert to string
+        # if data_str is None:
+        #     data_str = str(packet.Packet(data))
+        # self.logger.debug('Packet out = %s', data_str, extra=self.sw_id)
+
+    def set_normal_flow(self, cookie, priority):
+        #out_port = self.dp.ofproto.OFPP_NORMAL
+        out_port = self.dp.ofproto.OFPP_CONTROLLER
+        actions = [self.dp.ofproto_parser.OFPActionOutput(out_port, 0)]
+        self.set_flow(cookie, priority, actions=actions)
+
+    def set_packetin_flow(self, cookie, priority, dl_type=0, dl_dst=0,
+                          dl_vlan=0, dst_ip=0, dst_mask=32, nw_proto=0):
+        miss_send_len = UINT16_MAX
+        actions = [self.dp.ofproto_parser.OFPActionOutput(
+            self.dp.ofproto.OFPP_CONTROLLER, miss_send_len)]
+        self.set_flow(cookie, priority, dl_type=dl_type, dl_dst=dl_dst,
+                      dl_vlan=dl_vlan, nw_dst=dst_ip, dst_mask=dst_mask,
+                      nw_proto=nw_proto, actions=actions)
+
+    def send_stats_request(self, stats, waiters):
+        self.dp.set_xid(stats)
+        waiters_per_dp = waiters.setdefault(self.dp.id, {})
+        event = hub.Event()
+        msgs = []
+        waiters_per_dp[stats.xid] = (event, msgs)
+        self.dp.send_msg(stats)
+
+        try:
+            event.wait(timeout=OFP_REPLY_TIMER)
+        except hub.Timeout:
+            del waiters_per_dp[stats.xid]
+
+        return msgs
+
+
+@OfCtl.register_of_version(ofproto_v1_0.OFP_VERSION)
+class OfCtl_v1_0(OfCtl):
+
+    def __init__(self, dp, logger):
+        super(OfCtl_v1_0, self).__init__(dp, logger)
+
+    def get_packetin_inport(self, msg):
+        return msg.in_port
+
+    def get_all_flow(self, waiters):
+        ofp = self.dp.ofproto
+        ofp_parser = self.dp.ofproto_parser
+
+        match = ofp_parser.OFPMatch(ofp.OFPFW_ALL, 0, 0, 0,
+                                    0, 0, 0, 0, 0, 0, 0, 0, 0)
+        stats = ofp_parser.OFPFlowStatsRequest(self.dp, 0, match,
+                                               0xff, ofp.OFPP_NONE)
+        return self.send_stats_request(stats, waiters)
+
+    def set_flow(self, cookie, priority, dl_type=0, dl_dst=0, dl_vlan=0,
+                 nw_src=0, src_mask=32, nw_dst=0, dst_mask=32,
+                 nw_proto=0, idle_timeout=0, actions=None):
+        ofp = self.dp.ofproto
+        ofp_parser = self.dp.ofproto_parser
+        cmd = ofp.OFPFC_ADD
+
+        # Match
+        wildcards = ofp.OFPFW_ALL
+        if dl_type:
+            wildcards &= ~ofp.OFPFW_DL_TYPE
+        if dl_dst:
+            wildcards &= ~ofp.OFPFW_DL_DST
+        if dl_vlan:
+            wildcards &= ~ofp.OFPFW_DL_VLAN
+        if nw_src:
+            v = (32 - src_mask) << ofp.OFPFW_NW_SRC_SHIFT | \
+                ~ofp.OFPFW_NW_SRC_MASK
+            wildcards &= v
+            nw_src = ipv4_text_to_int(nw_src)
+        if nw_dst:
+            v = (32 - dst_mask) << ofp.OFPFW_NW_DST_SHIFT | \
+                ~ofp.OFPFW_NW_DST_MASK
+            wildcards &= v
+            nw_dst = ipv4_text_to_int(nw_dst)
+        if nw_proto:
+            wildcards &= ~ofp.OFPFW_NW_PROTO
+
+        match = ofp_parser.OFPMatch(wildcards, 0, 0, dl_dst, dl_vlan, 0,
+                                    dl_type, 0, nw_proto,
+                                    nw_src, nw_dst, 0, 0)
+        actions = actions or []
+
+        m = ofp_parser.OFPFlowMod(self.dp, match, cookie, cmd,
+                                  idle_timeout=idle_timeout,
+                                  priority=priority, actions=actions)
+        self.dp.send_msg(m)
+
+
+    def set_routing_flow(self, cookie, priority, outport, dl_vlan=0,
+                         nw_src=0, src_mask=32, nw_dst=0, dst_mask=32,
+                         src_mac=0, dst_mac=0, idle_timeout=0, **dummy):
+        ofp_parser = self.dp.ofproto_parser
+
+        dl_type = ether.ETH_TYPE_IP
+
+        # Decrement TTL value is not supported at OpenFlow V1.0
+        actions = []
+        if src_mac:
+            actions.append(ofp_parser.OFPActionSetDlSrc(
+                           mac_lib.haddr_to_bin(src_mac)))
+        if dst_mac:
+            actions.append(ofp_parser.OFPActionSetDlDst(
+                           mac_lib.haddr_to_bin(dst_mac)))
+        if outport is not None:
+            actions.append(ofp_parser.OFPActionOutput(outport))
+
+        self.set_flow(cookie, priority, dl_type=dl_type, dl_vlan=dl_vlan,
+                      nw_src=nw_src, src_mask=src_mask,
+                      nw_dst=nw_dst, dst_mask=dst_mask,
+                      idle_timeout=idle_timeout, actions=actions)
+
+    def delete_flow(self, flow_stats):
+        match = flow_stats.match
+        cookie = flow_stats.cookie
+        cmd = self.dp.ofproto.OFPFC_DELETE_STRICT
+        priority = flow_stats.priority
+        actions = []
+
+        flow_mod = self.dp.ofproto_parser.OFPFlowMod(
+            self.dp, match, cookie, cmd, priority=priority, actions=actions)
+        self.dp.send_msg(flow_mod)
+        self.logger.info('Delete flow [cookie=0x%x]', cookie, extra=self.sw_id)
+
+
+class OfCtl_after_v1_2(OfCtl):
+
+    def __init__(self, dp, logger):
+        super(OfCtl_after_v1_2, self).__init__(dp, logger)
+
+    def set_sw_config_for_ttl(self):
+        pass
+
+    def get_packetin_inport(self, msg):
+        in_port = self.dp.ofproto.OFPP_ANY
+        for match_field in msg.match.fields:
+            if match_field.header == self.dp.ofproto.OXM_OF_IN_PORT:
+                in_port = match_field.value
+                break
+        return in_port
+
+    def get_all_flow(self, waiters):
+        pass
+
+    def set_flow(self, cookie, priority, dl_type=0, dl_dst=0, dl_vlan=0,
+                 nw_src=0, src_mask=32, nw_dst=0, dst_mask=32,
+                 nw_proto=0, idle_timeout=0, actions=None):
+        ofp = self.dp.ofproto
+        ofp_parser = self.dp.ofproto_parser
+        cmd = ofp.OFPFC_ADD
+
+        # Match
+        match = ofp_parser.OFPMatch()
+        if dl_type:
+            match.set_dl_type(dl_type)
+        if dl_dst:
+            match.set_dl_dst(dl_dst)
+        if dl_vlan:
+            match.set_vlan_vid(dl_vlan)
+        if nw_src:
+            match.set_ipv4_src_masked(ipv4_text_to_int(nw_src),
+                                      mask_ntob(src_mask))
+        if nw_dst:
+            match.set_ipv4_dst_masked(ipv4_text_to_int(nw_dst),
+                                      mask_ntob(dst_mask))
+        if nw_proto:
+            if dl_type == ether.ETH_TYPE_IP:
+                match.set_ip_proto(nw_proto)
+            elif dl_type == ether.ETH_TYPE_ARP:
+                match.set_arp_opcode(nw_proto)
+
+        # Instructions
+        actions = actions or []
+        inst = [ofp_parser.OFPInstructionActions(ofp.OFPIT_APPLY_ACTIONS,
+                                                 actions)]
+
+        m = ofp_parser.OFPFlowMod(self.dp, cookie, 0, 0, cmd, idle_timeout,
+                                  0, priority, UINT32_MAX, ofp.OFPP_ANY,
+                                  ofp.OFPG_ANY, 0, match, inst)
+        self.dp.send_msg(m)
+
+    def set_routing_flow(self, cookie, priority, outport, dl_vlan=0,
+                         nw_src=0, src_mask=32, nw_dst=0, dst_mask=32,
+                         src_mac=0, dst_mac=0, idle_timeout=0, dec_ttl=False):
+        ofp = self.dp.ofproto
+        ofp_parser = self.dp.ofproto_parser
+
+        dl_type = ether.ETH_TYPE_IP
+
+        actions = []
+        if dec_ttl:
+            actions.append(ofp_parser.OFPActionDecNwTtl())
+        if src_mac:
+            actions.append(ofp_parser.OFPActionSetField(eth_src=src_mac))
+        if dst_mac:
+            actions.append(ofp_parser.OFPActionSetField(eth_dst=dst_mac))
+        if outport is not None:
+            actions.append(ofp_parser.OFPActionOutput(outport, 0))
+
+        self.set_flow(cookie, priority, dl_type=dl_type, dl_vlan=dl_vlan,
+                      nw_src=nw_src, src_mask=src_mask,
+                      nw_dst=nw_dst, dst_mask=dst_mask,
+                      idle_timeout=idle_timeout, actions=actions)
+
+    #TODO check if flow is added for the request router
+    #THOMAS, added new function for adding packetin flow for the request routers
+    def set_request_router_packetin_flow(self, cookie, priority, eth_type=ether.ETH_TYPE_IP, dst_ip=0, ip_proto=6, tcp_dst=80):
+        ofp = self.dp.ofproto
+        ofp_parser = self.dp.ofproto_parser
+
+        cmd = ofp.OFPFC_ADD
+        idle_timeout = 0
+
+        actions = [ofp_parser.OFPActionOutput(ofp.OFPP_CONTROLLER, ofp.OFPCML_NO_BUFFER)]
+        match = ofp_parser.OFPMatch(eth_type=eth_type, ipv4_dst=dst_ip, ip_proto=ip_proto, tcp_dst=tcp_dst)
+
+        inst = [ofp_parser.OFPInstructionActions(ofp.OFPIT_APPLY_ACTIONS, actions)]
+
+        m = ofp_parser.OFPFlowMod(self.dp, cookie, 0, 0, cmd, idle_timeout,
+                                  0, priority, UINT32_MAX, ofp.OFPP_ANY,
+                                  ofp.OFPG_ANY, 0, match, inst)
+        self.dp.send_msg(m)
+
+
+    def delete_flow(self, flow_stats):
+        ofp = self.dp.ofproto
+        ofp_parser = self.dp.ofproto_parser
+
+        cmd = ofp.OFPFC_DELETE
+        cookie = flow_stats.cookie
+        cookie_mask = UINT64_MAX
+        match = ofp_parser.OFPMatch()
+        inst = []
+
+        flow_mod = ofp_parser.OFPFlowMod(self.dp, cookie, cookie_mask, 0, cmd,
+                                         0, 0, 0, UINT32_MAX, ofp.OFPP_ANY,
+                                         ofp.OFPG_ANY, 0, match, inst)
+        self.dp.send_msg(flow_mod)
+        self.logger.info('Delete flow [cookie=0x%x]', cookie, extra=self.sw_id)
+
+
+@OfCtl.register_of_version(ofproto_v1_2.OFP_VERSION)
+class OfCtl_v1_2(OfCtl_after_v1_2):
+
+    def __init__(self, dp, logger):
+        super(OfCtl_v1_2, self).__init__(dp, logger)
+
+    def set_sw_config_for_ttl(self):
+        flags = self.dp.ofproto.OFPC_INVALID_TTL_TO_CONTROLLER
+        miss_send_len = UINT16_MAX
+        m = self.dp.ofproto_parser.OFPSetConfig(self.dp, flags,
+                                                miss_send_len)
+        self.dp.send_msg(m)
+        self.logger.info('Set SW config for TTL error packet in.',
+                         extra=self.sw_id)
+
+    def get_all_flow(self, waiters):
+        ofp = self.dp.ofproto
+        ofp_parser = self.dp.ofproto_parser
+
+        match = ofp_parser.OFPMatch()
+        stats = ofp_parser.OFPFlowStatsRequest(self.dp, 0, ofp.OFPP_ANY,
+                                               ofp.OFPG_ANY, 0, 0, match)
+        return self.send_stats_request(stats, waiters)
+
+
+@OfCtl.register_of_version(ofproto_v1_3.OFP_VERSION)
+class OfCtl_v1_3(OfCtl_after_v1_2):
+
+    def __init__(self, dp, logger):
+        super(OfCtl_v1_3, self).__init__(dp, logger)
+
+    def set_sw_config_for_ttl(self):
+        packet_in_mask = (1 << self.dp.ofproto.OFPR_ACTION |
+                          1 << self.dp.ofproto.OFPR_INVALID_TTL)
+        port_status_mask = (1 << self.dp.ofproto.OFPPR_ADD |
+                            1 << self.dp.ofproto.OFPPR_DELETE |
+                            1 << self.dp.ofproto.OFPPR_MODIFY)
+        flow_removed_mask = (1 << self.dp.ofproto.OFPRR_IDLE_TIMEOUT |
+                             1 << self.dp.ofproto.OFPRR_HARD_TIMEOUT |
+                             1 << self.dp.ofproto.OFPRR_DELETE)
+        m = self.dp.ofproto_parser.OFPSetAsync(
+            self.dp, [packet_in_mask, 0], [port_status_mask, 0],
+            [flow_removed_mask, 0])
+        self.dp.send_msg(m)
+        self.logger.info('Set SW config for TTL error packet in.',
+                         extra=self.sw_id)
+
+    def get_all_flow(self, waiters):
+        ofp = self.dp.ofproto
+        ofp_parser = self.dp.ofproto_parser
+
+        match = ofp_parser.OFPMatch()
+        stats = ofp_parser.OFPFlowStatsRequest(self.dp, 0, 0, ofp.OFPP_ANY,
+                                               ofp.OFPG_ANY, 0, 0, match)
+        return self.send_stats_request(stats, waiters)
 
 
 def ip_addr_aton(ip_str, err_msg=None):
