@@ -25,7 +25,7 @@ class Session:
     CDNERROR = 10
 
 
-    def __init__(self, srcip, srcport, pkt, rrip, rrmac):
+    def __init__(self, srcip, srcport, pkt, rrip, rrmac, inport):
         self.srcip = srcip
         self.srcport = srcport
         self.synpkt = pkt
@@ -39,6 +39,7 @@ class Session:
         self.httpgetpkt = None
         self.synackpkt = None
         self.clientsrcMac = None
+        self.inport = inport
         self.state = self.SYNRECV
 
     #This function is used to generate a SYN, ACK response to a initial SYN request.
@@ -76,7 +77,8 @@ class Session:
         for p in self.synpkt:
             if p.protocol_name == 'ethernet':
                 eth_dst = self.serviceEngineMAC
-                e = ethernet.ethernet(eth_dst, p.src)
+                #TODO check unchanged dest src mac
+                e = ethernet.ethernet(p.dst, p.src)
             if p.protocol_name == 'ipv4':
                 ip_dst = self.serviceEngineIP
                 ip = ipv4.ipv4(4, 5, p.tos, 0, p.identification, p.flags, 0, p.ttl, p.proto, 0, p.src, ip_dst, None)
@@ -155,3 +157,6 @@ class Session:
 
     def getClientMac(self):
         return self.clientsrcMac
+
+    def getClientInPort(self):
+        return self.inport

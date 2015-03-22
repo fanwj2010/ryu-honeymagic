@@ -62,33 +62,36 @@ class Cdnapp:
 
     # Doing longest prefix match for IP and domain
     def getSeForIP(self, requestIP=None, domainName='cdn.example.com'):
+        #TODO, get it from routing
+
+        return ('104.0.0.2', '11:11:11:11:11:11')
 
         # IF no routes at all in the routing table
-        if not self.routes:
-            return (None, None)
-
-        maxprefix = 0
-
-        matchingroutes = {}
-
-        for keys in self.routes.keys():
-            print self.routes[keys]
-            if str(self.routes[keys]['domain_name']) == str(domainName):
-                ip = IPNetwork(self.routes[keys]['prefix'], self.routes[keys]['mask'])
-                checkip = IPNetwork(requestIP, self.routes[keys]['mask'])
-                #prefix matches
-                if str(ip.cidr) == str(checkip.cidr):
-                    matchingroutes[keys] = {}
-                    matchingroutes[keys] = self.routes[keys]
-                    matchingroutes[keys]['prefixlen'] = ip.prefixlen
-                    maxprefix = ip.prefixlen
-
-        for keys in matchingroutes.keys():
-            if int(matchingroutes[keys]['prefixlen']) == int(maxprefix):
-                return (matchingroutes[keys]['se_ip'], matchingroutes[keys]['se_mac_address'])
-
-        firstroute = self.routes.itervalues().next()
-
-        return (firstroute['se_ip'], firstroute['se_mac_address'])
+        # if not self.routes:
+        #     return (None, None)
+        #
+        # maxprefix = 0
+        #
+        # matchingroutes = {}
+        #
+        # for keys in self.routes.keys():
+        #     print self.routes[keys]
+        #     if str(self.routes[keys]['domain_name']) == str(domainName):
+        #         ip = IPNetwork(self.routes[keys]['prefix'], self.routes[keys]['mask'])
+        #         checkip = IPNetwork(requestIP, self.routes[keys]['mask'])
+        #         #prefix matches
+        #         if str(ip.cidr) == str(checkip.cidr):
+        #             matchingroutes[keys] = {}
+        #             matchingroutes[keys] = self.routes[keys]
+        #             matchingroutes[keys]['prefixlen'] = ip.prefixlen
+        #             maxprefix = ip.prefixlen
+        #
+        # for keys in matchingroutes.keys():
+        #     if int(matchingroutes[keys]['prefixlen']) == int(maxprefix):
+        #         return (matchingroutes[keys]['se_ip'], matchingroutes[keys]['se_mac_address'])
+        #
+        # firstroute = self.routes.itervalues().next()
+        #
+        # return (firstroute['se_ip'], firstroute['se_mac_address'])
 
 

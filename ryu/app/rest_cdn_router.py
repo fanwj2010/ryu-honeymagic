@@ -59,6 +59,7 @@ from ryu.app.VlanRouterUtils import PortData, Port, AddressData, Address, Routin
 from ryu.app.VlanRouterOFCTL import OfCtl, OfCtl_after_v1_2, OfCtl_v1_0, OfCtl_v1_2, OfCtl_v1_3
 
 import array
+import pprint
 
 
 # =============================
@@ -175,6 +176,7 @@ PRIORITY_IMPLICIT_ROUTING = 3
 PRIORITY_L2_SWITCHING = 4
 PRIORITY_IP_HANDLING = 5
 PRIORITY_CDN_HANDLING = 6
+PRIORITY_CDN_TCP_JOINING = 7
 
 PRIORITY_TYPE_ROUTE = 'priority_route'
 
@@ -245,7 +247,6 @@ class RestRouterAPI(app_manager.RyuApp):
                         'vlan_id': VLANID_PATTERN}
 
         #call to list all the switches
-        #TODO create the mapper for the topologycontroller
         #TODO create rest calls for the CDN controller
 
         # For no vlan data
@@ -357,7 +358,6 @@ def rest_command(func):
 class TopologyController(ControllerBase):
     def __init__(self, req, link, data, **config):
         super(TopologyController, self).__init__(req, link, data, **config)
-        print 'Topologycontroller is initialized'
 
 
 class RouterController(ControllerBase):
@@ -867,6 +867,11 @@ class VlanRouter(object):
         cookie = 0
         self.ofctl.set_request_router_packetin_flow(cookie, priority, ether.ETH_TYPE_IP, rr_address, 6, 80)
 
+    def _set_cdncomm_backward_communication_flow(self, matchip, matchport):
+        priority = self._get_priority(PRIORITY_CDN_HANDLING)
+        cookie = 0
+        self.ofctl.set_cdncomm_backward_packetin_flow(cookie, priority, ether.ETH_TYPE_IP, matchip, 6, matchport)
+
     def _set_defaultroute_drop(self):
         cookie = self._id_to_cookie(REST_VLANID, self.vlan_id)
         priority = self._get_priority(PRIORITY_DEFAULT_ROUTING)
@@ -1044,9 +1049,7 @@ class VlanRouter(object):
             return
 
         if IPV4 in header_list:
-            print 'ipv4 is in header list'
             rt_ports = self.address_data.get_default_gw()
-            print(self.request_routers)
             rr_ports = self.request_routers
             if header_list[IPV4].dst in rt_ports:
                 # Packet to router's port.
@@ -1058,14 +1061,10 @@ class VlanRouter(object):
                     self._packetin_tcp_udp(msg, header_list)
                     return
             elif header_list[IPV4].dst in rr_ports.keys():
-                print 'wohoooo we are doing shit with the request routers IP yeah'
-                print header_list
                 self.manage_cdncomm(msg)
-
-#QWERTY
-
-
-##TODO check here if the communication is for the request rotuer...all that shit begins here.
+            elif header_list[IPV4].dst in self.sessions:
+                    if TCP in header_list and header_list[TCP].dst_port in self.sessions[header_list[IPV4].dst]:
+                        self.manage_backward_cdncomm(msg)
             else:
                 # Packet to internal host or gateway router.
                 self._packetin_to_node(msg, header_list)
@@ -1308,6 +1307,7 @@ class VlanRouter(object):
         gateways = self.routing_tbl.get_gateways()
         if src_ip not in gateways:
             address = self.address_data.get_data(ip=src_ip)
+
             if address is not None:
                 cookie = self._id_to_cookie(REST_ADDRESSID, address.address_id)
                 priority = self._get_priority(PRIORITY_IMPLICIT_ROUTING)
@@ -1345,6 +1345,11 @@ class VlanRouter(object):
                           ip_addr_ntoa(src_ip), extra=self.sw_id)
         return None
 
+    def prepare_backward_match_action(self, pkt, parser, ofproto):
+        ipd = pkt.get_protocol(ipv4.ipv4)
+        tcpd = pkt.get_protocol(tcp.tcp)
+
+        return ipd.src, tcpd.src_port
 
     def manage_cdncomm(self, msg):
         pkt = packet.Packet(array.array('B', msg.data))
@@ -1374,7 +1379,7 @@ class VlanRouter(object):
 
         # SYN IS SET, MEANS WE ARE DECLARING A NEW SESSION AND STORE THE ORIGINAL PACKET. SENDING A SYN ACK RESPONSE
         if tcpdat.bits & 0x2:
-            sess = Session(src_ip, tcpdat.src_port, pkt, dst_ip, ethdat.dst)
+            sess = Session(src_ip, tcpdat.src_port, pkt, dst_ip, ethdat.dst, in_port)
             if src_ip in self.sessions:
                 self.sessions[src_ip][tcpdat.src_port] = sess
             else:
@@ -1417,34 +1422,89 @@ class VlanRouter(object):
                         sess.saveHTTPGETpkt(pkt)
                         sess.setPayload(payload)
 
-                        seip, semac = self.cdn.getSeForIP(sess.srcip)
+                        #TODO get se ip from the routers cdn routing table
+                        #seip, semac = self.cdn.getSeForIP(sess.srcip)
+                        seip = '104.0.0.2'
+                        semac = '11:11:11:11:11:11'
                         sess.setServiceEngineIPandMAC(seip, semac)
                         synpkt = sess.generateSYNpkt()
 
-                        match, actions = self.prepare_backward_match_action(synpkt, parser, ofproto)
-
-                        self.add_flow(datapath, 2, match, actions)
-
+                        matchip, matchport = self.prepare_backward_match_action(synpkt, parser, ofproto)
+                        self._set_cdncomm_backward_communication_flow(matchip, matchport)
                         data = synpkt.data
 
-                        #TODO make sure mac address is in this table else create a ARP request ?!
-                        if semac in self.mac_to_port[dpid]:
-                            out_port = self.mac_to_port[dpid][semac]
+                        #This will make an ARP request for us, we have just replaced the destination IP address
+                        output = self.ofctl.dp.ofproto.OFPP_TABLE
+                        self.ofctl.send_packet_out(in_port, output, data)
 
-                        actions = [parser.OFPActionOutput(out_port)]
-                        out = parser.OFPPacketOut(datapath=datapath, buffer_id=ofproto.OFP_NO_BUFFER,
-                                                  in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=data)
-                        datapath.send_msg(out)
                         sess.setState(Session.SYNSENT)
 
                         return
                     else:
+                        print 'about to raise badstateexception'
                         raise badStateException('We did not received ACK with payload in state ' + sess.getState())
 
             except Exception:
                 print Exception.message
                 #TODO update state
 
+    def manage_backward_cdncomm(self, msg):
+        pkt = packet.Packet(array.array('B', msg.data))
+        in_port = msg.match['in_port']
+        datapath = msg.datapath
+        dpid = datapath.id
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+
+        ipd = pkt.get_protocol(ipv4.ipv4)
+        tcpdat = pkt.get_protocol(tcp.tcp)
+
+        sess = self.sessions[ipd.dst][tcpdat.dst_port]
+
+        if sess.getState() == Session.SYNSENT:
+            if tcpdat.bits == 1 << 4 | 1 << 1:
+                sess.setState(Session.SYNACKRECV)
+                sess.saveSEseq(tcpdat.seq)
+                sess.saveSYNACKpkt(pkt)
+
+                #GENERATE ACK TO SYN ACK
+                ackpkt = sess.generateACKtoSYNACK()
+                self.ofctl.send_packet_out(in_port, in_port, ackpkt.data)
+
+
+                #TODO we dont need macs revise it
+                rrip, rrmac = sess.getRequestRouterIPandMAC()
+                seip, semac = sess.getServiceEngineIPandMAC()
+
+                #TODO, if service engine is on this router, set dest mac address to se not gw mac.
+                address = self.address_data.get_data(ip=seip)
+                if address is not None:
+                    src_ip = address.default_gw
+                else:
+                    route = self.routing_tbl.get_data(dst_ip=seip)
+                    if route is not None:
+                        gw_address = self.address_data.get_data(ip=route.gateway_ip)
+                        if gw_address is not None:
+                            src_ip = gw_address.default_gw
+                            dst_ip = route.gateway_ip
+
+                for ports in self.port_data.values():
+                    if ports.port_no == in_port:
+                        in_port_mac_se = ports.mac
+                    if ports.port_no == sess.getClientInPort():
+                        in_port_mac_client = ports.mac
+
+                priority = self._get_priority(PRIORITY_CDN_TCP_JOINING)
+                self.ofctl.set_cdncomm_to_se_joining_flow(0, priority, ether.ETH_TYPE_IP, sess.srcip, sess.srcport, 6,
+                                    sess.getCounterDiff() - 1, seip, in_port_mac_se, route.gateway_mac, in_port)
+
+                tcpseq = 0xffffffff - sess.getCounterDiff() + 2
+
+                self.ofctl.set_cdncomm_from_se_joining_flow(0, priority, ether.ETH_TYPE_IP, sess.srcip, sess.srcport, 6,
+                                    tcpseq, rrip, in_port_mac_client, sess.getClientMac(), sess.getClientInPort())
+
+                #TODO send HTTP GET
+                return
 
 
 

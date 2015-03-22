@@ -421,6 +421,66 @@ class OfCtl_after_v1_2(OfCtl):
                                   ofp.OFPG_ANY, 0, match, inst)
         self.dp.send_msg(m)
 
+    def set_cdncomm_backward_packetin_flow(self, cookie, priority, eth_type=ether.ETH_TYPE_IP, src_ip=0, ip_proto=6, tcp_dst=0):
+
+        ofproto = self.dp.ofproto
+        parser = self.dp.ofproto_parser
+
+        cmd = ofproto.OFPFC_ADD
+        idle_timeout = 0
+
+        match = parser.OFPMatch(eth_type=eth_type, ipv4_dst=src_ip, ip_proto=ip_proto, tcp_dst=tcp_dst)
+        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
+
+        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS,
+                                             actions)]
+        m = parser.OFPFlowMod(self.dp, cookie, 0, 0, cmd, idle_timeout,
+                                  0, priority, UINT32_MAX, ofproto.OFPP_ANY,
+                                  ofproto.OFPG_ANY, 0, match, inst)
+        self.dp.send_msg(m)
+
+    def set_cdncomm_to_se_joining_flow(self, cookie=0, priority=0, eth_type=ether.ETH_TYPE_IP, src_ip=0, src_port=0,
+                                       ip_proto=6, tcp_ack=0, se_ip=0, src_mac=0, dst_mac=0, out_port=0):
+
+        ofproto = self.dp.ofproto
+        parser = self.dp.ofproto_parser
+
+        cmd = ofproto.OFPFC_ADD
+        idle_timeout = 0
+
+        match = parser.OFPMatch(eth_type=eth_type, ipv4_src=src_ip, ip_proto=ip_proto, tcp_src=src_port)
+        actions = [parser.OFPActionSetField(tcp_ack=tcp_ack), parser.OFPActionSetField(ipv4_dst=se_ip),
+                           parser.OFPActionSetField(eth_dst=dst_mac), parser.OFPActionSetField(eth_src=src_mac),
+                           parser.OFPActionOutput(out_port)]
+
+        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+
+        m = parser.OFPFlowMod(self.dp, cookie, 0, 0, cmd, idle_timeout,
+                              0, priority, UINT32_MAX, ofproto.OFPP_ANY,
+                              ofproto.OFPG_ANY, 0, match, inst)
+        self.dp.send_msg(m)
+
+    def set_cdncomm_from_se_joining_flow(self, cookie=0, priority=0, eth_type=ether.ETH_TYPE_IP, dst_ip=0, dst_port=0,
+                                       ip_proto=6, tcp_seq=0, rr_ip=0, src_mac=0, dst_mac=0, out_port=0):
+
+        ofproto = self.dp.ofproto
+        parser = self.dp.ofproto_parser
+
+        cmd = ofproto.OFPFC_ADD
+        idle_timeout = 0
+
+        match = parser.OFPMatch(eth_type=eth_type, ipv4_dst=dst_ip, ip_proto=ip_proto, tcp_dst=dst_port)
+        actions = [parser.OFPActionSetField(tcp_seq=tcp_seq), parser.OFPActionSetField(ipv4_src=rr_ip),
+                           parser.OFPActionSetField(eth_dst=dst_mac), parser.OFPActionSetField(eth_src=src_mac),
+                           parser.OFPActionOutput(out_port)]
+
+        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+
+        m = parser.OFPFlowMod(self.dp, cookie, 0, 0, cmd, idle_timeout,
+                              0, priority, UINT32_MAX, ofproto.OFPP_ANY,
+                              ofproto.OFPG_ANY, 0, match, inst)
+        self.dp.send_msg(m)
+
 
     def delete_flow(self, flow_stats):
         ofp = self.dp.ofproto
