@@ -25,15 +25,13 @@ class Session:
     CDNERROR = 10
 
 
-    def __init__(self, srcip, srcport, pkt, rrip, rrmac, inport):
+    def __init__(self, srcip, srcport, pkt, rrip, inport):
         self.srcip = srcip
         self.srcport = srcport
         self.synpkt = pkt
         self.seq = 0
         self.requestRouterIP = rrip
-        self.requestRouterMac = rrmac
         self.serviceEngineIP = None
-        self.serviceEngineMAC = None
         self.ackpkt = None
         self.requesturi = None
         self.httpgetpkt = None
@@ -76,8 +74,6 @@ class Session:
     def generateSYNpkt(self, dst_port=80):
         for p in self.synpkt:
             if p.protocol_name == 'ethernet':
-                eth_dst = self.serviceEngineMAC
-                #TODO check unchanged dest src mac
                 e = ethernet.ethernet(p.dst, p.src)
             if p.protocol_name == 'ipv4':
                 ip_dst = self.serviceEngineIP
@@ -145,15 +141,14 @@ class Session:
     def getCounterDiff(self):
         return self.seq
 
-    def getRequestRouterIPandMAC(self):
-        return (self.requestRouterIP, self.requestRouterMac)
+    def getRequestRouterIP(self):
+        return self.requestRouterIP
 
-    def setServiceEngineIPandMAC(self, ipadd, mac):
+    def setServiceEngineIP(self, ipadd):
         self.serviceEngineIP = ipadd
-        self.serviceEngineMAC = mac
 
-    def getServiceEngineIPandMAC(self):
-        return (self.serviceEngineIP, self.serviceEngineMAC)
+    def getServiceEngineIP(self):
+        return self.serviceEngineIP
 
     def getClientMac(self):
         return self.clientsrcMac

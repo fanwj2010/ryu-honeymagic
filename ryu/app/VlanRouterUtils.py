@@ -53,6 +53,8 @@ REST_GATEWAY = 'gateway'
 
 #CUSTOM REST VARIABLES
 REST_REQUEST_ROUTER = 'request_router'
+REST_CDN_DESTINATION = 'destination'
+REST_CDN_SE = 'service_engine'
 
 PRIORITY_VLAN_SHIFT = 1000
 PRIORITY_NETMASK_SHIFT = 32
@@ -232,6 +234,53 @@ class Route(object):
         self.gateway_mac = None
 
 
+class CdnRoutingTable(dict):
+    def __init__(self):
+        super(CdnRoutingTable, self).__init__()
+        self.route_id = 1
+
+    def add(self, dst_nw_addr, gateway_ip):
+        err_msg = 'Invalid [%s] value.'
+
+        dest_nw, netmask, dummy = nw_addr_aton(
+            dst_nw_addr, err_msg=err_msg % REST_CDN_DESTINATION)
+
+        se_ip = ip_addr_aton(gateway_ip, err_msg=err_msg % REST_CDN_SE)
+
+        routing_data = CdnRoute(self.route_id, dest_nw, netmask, se_ip)
+
+        ip_str = ip_addr_ntoa(dest_nw)
+        key = '%s/%d' % (ip_str, netmask)
+        self[key] = routing_data
+
+        self.route_id += 1
+        self.route_id &= UINT32_MAX
+
+        return routing_data
+
+    def get_data(self, src_ip=None):
+        if src_ip is not None:
+            get_route = None
+            mask = 0
+            for route in self.values():
+                if ipv4_apply_mask(src_ip, route.netmask) == route.dst_nw:
+                    # For longest match
+                    if mask < route.netmask:
+                        get_route = route
+                        mask = route.netmask
+
+        return get_route
+
+
+class CdnRoute(object):
+    def __init__(self, route_id, dest_nw, netmask, se_ip):
+        super(CdnRoute, self).__init__()
+        self.route_id = route_id
+        self.dst_nw = dest_nw
+        self.netmask = netmask
+        self.se_ip = se_ip
+
+
 class SuspendPacketList(list):
     def __init__(self, timeout_function):
         super(SuspendPacketList, self).__init__()
@@ -274,8 +323,6 @@ class SuspendPacket(object):
         self.data = data
         # Start ARP reply wait timer.
         self.wait_thread = hub.spawn(timer, self)
-
-
 
 class RequestRouterTable(dict):
     def __init__(self):

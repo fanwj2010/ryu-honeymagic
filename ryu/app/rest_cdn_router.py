@@ -17,6 +17,7 @@
 import logging
 import socket
 import struct
+import sys, traceback
 
 import json
 from webob import Response
@@ -54,7 +55,7 @@ from ryu.cdnapp.cdnapp import Cdnapp
 from ryu.cdnapp.exceptions import CustomException, badStateException
 
 from ryu.app.VlanRouterUtils import PortData, Port, AddressData, Address, RoutingTable, Route, \
-    SuspendPacketList, SuspendPacket, RequestRouterTable
+    SuspendPacketList, SuspendPacket, RequestRouterTable, CdnRoutingTable
 
 from ryu.app.VlanRouterOFCTL import OfCtl, OfCtl_after_v1_2, OfCtl_v1_0, OfCtl_v1_2, OfCtl_v1_3
 
@@ -163,6 +164,8 @@ REST_GATEWAY = 'gateway'
 
 #CUSTOM REST VARIABLES
 REST_REQUEST_ROUTER = 'request_router'
+REST_CDN_DESTINATION = 'destination'
+REST_CDN_SE = 'service_engine'
 
 PRIORITY_VLAN_SHIFT = 1000
 PRIORITY_NETMASK_SHIFT = 32
@@ -627,7 +630,6 @@ class Router(dict):
         pkt = packet.Packet(msg.data)
         # TODO: Packet library convert to string
         # self.logger.debug('Packet in = %s', str(pkt), self.sw_id)
-        #TODO probably this does not parse the payload of the packet THOMAS qwerty
         header_list = dict((p.protocol_name, p)
                            for p in pkt.protocols if type(p) != str)
         if header_list:
@@ -667,7 +669,9 @@ class VlanRouter(object):
         self.packet_buffer = SuspendPacketList(self.send_icmp_unreach_error)
         self.ofctl = OfCtl.factory(dp, logger)
         self.request_routers = RequestRouterTable()
+        self.cdn_routing_table = CdnRoutingTable()
         self.sessions = {}
+        self.serviceengines = {}
 
         # Set flow: default route (drop)
         self._set_defaultroute_drop()
@@ -786,6 +790,12 @@ class VlanRouter(object):
                 req_router = data[REST_REQUEST_ROUTER]
                 req_router_id = self._set_request_router_address_data(req_router)
                 details = 'Added request router [id=%d]' % req_router_id
+            if REST_CDN_DESTINATION in data:
+                destination = data[REST_CDN_DESTINATION]
+                service_engine = data[REST_CDN_SE]
+                cdnroute_id = self._set_cdn_routing_table_route_data(destination, service_engine)
+                details = 'Added route [id=%d]' % cdnroute_id
+
         except CommandFailure as err_msg:
             msg = {REST_RESULT: REST_NG, REST_DETAILS: str(err_msg)}
             return self._response(msg)
@@ -853,7 +863,6 @@ class VlanRouter(object):
             self.send_arp_request(src_ip, dst_ip)
             return route.route_id
 
-    #TODO, check and check where to save the IP according to the other implementation like routing and address
     def _set_request_router_address_data(self, rr_address):
         err_msg = 'Invalid [%s] value.' % REST_REQUEST_ROUTER
         rr_ip = ip_addr_aton(rr_address, err_msg=err_msg)
@@ -861,6 +870,11 @@ class VlanRouter(object):
         self._set_request_router_packetin(rr_ip)
         self.logger.info('Set request router packet in flow for CDN for [dst_ip=%s]', rr_ip, extra=self.sw_id)
         return req_router
+
+    def _set_cdn_routing_table_route_data(self, nw_dst, se_ip):
+        cdn_route = self.cdn_routing_table.add(nw_dst, se_ip)
+        self.logger.info('Added new route for CDN engine [%s] to [%s]', nw_dst, se_ip, extra=self.sw_id)
+        return cdn_route.route_id
 
     def _set_request_router_packetin(self, rr_address):
         priority = self._get_priority(PRIORITY_CDN_HANDLING)
@@ -1137,6 +1151,11 @@ class VlanRouter(object):
                 self.logger.info(log_msg, srcip, dstip, extra=self.sw_id)
 
                 packet_list = self.packet_buffer.get_data(src_ip)
+                #TODO save if it is a service engine to make sure we have its mac address
+                #TODO check, test
+                if src_ip in self.serviceengines.keys():
+                    self.serviceengines[src_ip] = header_list[ETHERNET].src
+
                 if packet_list:
                     # stop ARP reply wait thread.
                     for suspend_packet in packet_list:
@@ -1379,7 +1398,7 @@ class VlanRouter(object):
 
         # SYN IS SET, MEANS WE ARE DECLARING A NEW SESSION AND STORE THE ORIGINAL PACKET. SENDING A SYN ACK RESPONSE
         if tcpdat.bits & 0x2:
-            sess = Session(src_ip, tcpdat.src_port, pkt, dst_ip, ethdat.dst, in_port)
+            sess = Session(src_ip, tcpdat.src_port, pkt, dst_ip, in_port)
             if src_ip in self.sessions:
                 self.sessions[src_ip][tcpdat.src_port] = sess
             else:
@@ -1424,11 +1443,12 @@ class VlanRouter(object):
 
                         #TODO get se ip from the routers cdn routing table
                         #seip, semac = self.cdn.getSeForIP(sess.srcip)
-                        seip = '104.0.0.2'
-                        semac = '11:11:11:11:11:11'
-                        sess.setServiceEngineIPandMAC(seip, semac)
+                        route = self.cdn_routing_table.get_data(src_ip=src_ip)
+                        seip = route.se_ip
+                        self.serviceengines[seip] = ""
+                        sess.setServiceEngineIP(seip)
                         synpkt = sess.generateSYNpkt()
-
+                        #qwerty
                         matchip, matchport = self.prepare_backward_match_action(synpkt, parser, ofproto)
                         self._set_cdncomm_backward_communication_flow(matchip, matchport)
                         data = synpkt.data
@@ -1446,6 +1466,7 @@ class VlanRouter(object):
 
             except Exception:
                 print Exception.message
+                traceback.print_exc(file=sys.stdout)
                 #TODO update state
 
     def manage_backward_cdncomm(self, msg):
@@ -1471,22 +1492,17 @@ class VlanRouter(object):
                 ackpkt = sess.generateACKtoSYNACK()
                 self.ofctl.send_packet_out(in_port, in_port, ackpkt.data)
 
+                rrip = sess.getRequestRouterIP()
+                seip = sess.getServiceEngineIP()
 
-                #TODO we dont need macs revise it
-                rrip, rrmac = sess.getRequestRouterIPandMAC()
-                seip, semac = sess.getServiceEngineIPandMAC()
-
-                #TODO, if service engine is on this router, set dest mac address to se not gw mac.
+                #TODO test situation, when service engine is on this router
                 address = self.address_data.get_data(ip=seip)
                 if address is not None:
-                    src_ip = address.default_gw
+                    gwmac = self.serviceengines[seip]
                 else:
                     route = self.routing_tbl.get_data(dst_ip=seip)
                     if route is not None:
-                        gw_address = self.address_data.get_data(ip=route.gateway_ip)
-                        if gw_address is not None:
-                            src_ip = gw_address.default_gw
-                            dst_ip = route.gateway_ip
+                        gwmac = route.gateway_mac
 
                 for ports in self.port_data.values():
                     if ports.port_no == in_port:
@@ -1496,7 +1512,7 @@ class VlanRouter(object):
 
                 priority = self._get_priority(PRIORITY_CDN_TCP_JOINING)
                 self.ofctl.set_cdncomm_to_se_joining_flow(0, priority, ether.ETH_TYPE_IP, sess.srcip, sess.srcport, 6,
-                                    sess.getCounterDiff() - 1, seip, in_port_mac_se, route.gateway_mac, in_port)
+                                    sess.getCounterDiff() - 1, seip, in_port_mac_se, gwmac, in_port)
 
                 tcpseq = 0xffffffff - sess.getCounterDiff() + 2
 
