@@ -51,7 +51,6 @@ from ryu.ofproto import ofproto_v1_3
 
 #Thomas custom imports for the CDNAPP
 from ryu.cdnapp.session import Session
-from ryu.cdnapp.cdnapp import Cdnapp
 from ryu.cdnapp.exceptions import CustomException, badStateException
 
 from ryu.app.VlanRouterUtils import PortData, Port, AddressData, Address, RoutingTable, Route, \
@@ -166,6 +165,7 @@ REST_GATEWAY = 'gateway'
 REST_REQUEST_ROUTER = 'request_router'
 REST_CDN_DESTINATION = 'destination'
 REST_CDN_SE = 'service_engine'
+REST_CDN_ROUTE = 'cdn_routing'
 
 PRIORITY_VLAN_SHIFT = 1000
 PRIORITY_NETMASK_SHIFT = 32
@@ -249,9 +249,6 @@ class RestRouterAPI(app_manager.RyuApp):
         requirements = {'switch_id': SWITCHID_PATTERN,
                         'vlan_id': VLANID_PATTERN}
 
-        #call to list all the switches
-        #TODO create rest calls for the CDN controller
-
         # For no vlan data
         path = '/router/{switch_id}'
         mapper.connect('router', path, controller=RouterController,
@@ -273,6 +270,10 @@ class RestRouterAPI(app_manager.RyuApp):
         mapper.connect('router', path, controller=RouterController,
                        action='set_rr_data',
                        conditions=dict(method=['POST']))
+
+        mapper.connect('router', path, controller=RouterController,
+                       action='get_rr_data',
+                       condition=dict(method=['GET']))
 
         # For vlan data
         path = '/router/{switch_id}/{vlan_id}'
@@ -356,11 +357,6 @@ def rest_command(func):
         return Response(status=status, body=json.dumps(msg))
 
     return _rest_command
-
-
-class TopologyController(ControllerBase):
-    def __init__(self, req, link, data, **config):
-        super(TopologyController, self).__init__(req, link, data, **config)
 
 
 class RouterController(ControllerBase):
@@ -449,6 +445,12 @@ class RouterController(ControllerBase):
     def set_rr_data(self, req, switch_id, **kwargs):
         return self._access_router(switch_id, VLANID_NONE,
                                    'set_rr_data', req.body)
+
+    # GET /cdn/rr/{switch_id}
+    @rest_command
+    def get_rr_data(self, req, switch_id, **kwargs):
+        return self._access_router(switch_id, VLANID_NONE,
+                                   'get_rr_data', req.body)
 
     def _access_router(self, switch_id, vlan_id, func, rest_param):
         rest_message = []
@@ -587,6 +589,16 @@ class Router(dict):
         return {REST_SWITCHID: self.dpid_str,
                 REST_COMMAND_RESULT: msgs}
 
+    def get_rr_data(self, vlan_id, dummy1, dummy2):
+        vlan_routers = self._get_vlan_router(vlan_id)
+        if vlan_routers:
+            msgs = [vlan_router.get_data() for vlan_router in vlan_routers]
+        else:
+            msgs = [{REST_SWITCHID: vlan_id}]
+
+        return {REST_SWITCHID: self.dpid_str,
+                REST_NW: msgs}
+
     def set_rr_data(self, vlan_id, param, waiters):
         vlan_routers = self._get_vlan_router(vlan_id)
         if not vlan_routers:
@@ -607,7 +619,6 @@ class Router(dict):
 
         return {REST_SWITCHID: self.dpid_str,
                 REST_COMMAND_RESULT: msgs}
-
 
     def delete_data(self, vlan_id, param, waiters):
         msgs = []
@@ -723,12 +734,15 @@ class VlanRouter(object):
     def get_data(self):
         address_data = self._get_address_data()
         routing_data = self._get_routing_data()
+        cdn_routing_data = self._get_cdn_routing_data()
 
         data = {}
         if address_data[REST_ADDRESS]:
             data.update(address_data)
         if routing_data[REST_ROUTE]:
             data.update(routing_data)
+        if cdn_routing_data[REST_CDN_ROUTE]:
+            data.update(cdn_routing_data)
 
         return self._response(data)
 
@@ -752,6 +766,17 @@ class VlanRouter(object):
                         REST_GATEWAY: gateway}
                 routing_data.append(data)
         return {REST_ROUTE: routing_data}
+
+    def _get_cdn_routing_data(self):
+        routing_data = []
+        for key, value in self.cdn_routing_table.items():
+            seip = ip_addr_ntoa(value.se_ip)
+            address = '%s/%d' % (value.dst_nw, value.netmask)
+            data = {REST_ROUTEID: value.route_id,
+                    REST_ADDRESS: address,
+                    REST_CDN_SE: seip}
+            routing_data.append(data)
+        return {REST_CDN_ROUTE: routing_data}
 
     def set_data(self, data):
         details = None
@@ -1445,7 +1470,8 @@ class VlanRouter(object):
                         #seip, semac = self.cdn.getSeForIP(sess.srcip)
                         route = self.cdn_routing_table.get_data(src_ip=src_ip)
                         seip = route.se_ip
-                        self.serviceengines[seip] = ""
+                        if seip not in self.serviceengines.keys():
+                            self.serviceengines[seip] = ""
                         sess.setServiceEngineIP(seip)
                         synpkt = sess.generateSYNpkt()
                         #qwerty

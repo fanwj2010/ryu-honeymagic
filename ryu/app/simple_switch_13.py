@@ -24,7 +24,6 @@ from ryu.lib.packet import ethernet
 from ryu.lib.packet import tcp
 from ryu.lib.packet import ipv4
 from ryu.cdnapp.session import Session
-from ryu.cdnapp.cdnapp import Cdnapp
 from ryu.cdnapp.exceptions import CustomException, badStateException
 import ryu.controller.dpset
 from ryu.controller.dpset import EventDP

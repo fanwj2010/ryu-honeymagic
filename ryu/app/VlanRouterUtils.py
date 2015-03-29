@@ -268,8 +268,8 @@ class CdnRoutingTable(dict):
                     if mask < route.netmask:
                         get_route = route
                         mask = route.netmask
-
-        return get_route
+        else:
+            return None
 
 
 class CdnRoute(object):

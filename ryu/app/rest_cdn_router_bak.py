@@ -50,7 +50,6 @@ from ryu.ofproto import ofproto_v1_3
 
 #Thomas custom imports for the CDNAPP
 from ryu.cdnapp.session import Session
-from ryu.cdnapp.cdnapp import Cdnapp
 from ryu.cdnapp.exceptions import CustomException, badStateException
 
 
