@@ -155,3 +155,12 @@ class Session:
 
     def getClientInPort(self):
         return self.inport
+
+    def getsrcPort(self):
+        return self.srcport
+
+    def getsrcIP(self):
+        return self.srcip
+
+    def getreqURI(self):
+        return self.requesturi

@@ -268,6 +268,7 @@ class CdnRoutingTable(dict):
                     if mask < route.netmask:
                         get_route = route
                         mask = route.netmask
+            return get_route
         else:
             return None
 
@@ -330,12 +331,10 @@ class RequestRouterTable(dict):
         self.request_router_id = 0
 
     def add(self, ip_address):
-        ip = IPAddress(ip_address)
+        #ip = IPAddress(ip_address)
         self.request_router_id +=1
-        self[ip_address] = ip
+        self[self.request_router_id] = ip_address
         return self.request_router_id
-
-
 
 def ip_addr_aton(ip_str, err_msg=None):
     try:

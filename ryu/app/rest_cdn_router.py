@@ -163,9 +163,18 @@ REST_GATEWAY = 'gateway'
 
 #CUSTOM REST VARIABLES
 REST_REQUEST_ROUTER = 'request_router'
+REST_REQUEST_ROUTER_ID = 'request_router_id'
 REST_CDN_DESTINATION = 'destination'
 REST_CDN_SE = 'service_engine'
 REST_CDN_ROUTE = 'cdn_routing'
+REST_SESSIONS = 'sessions'
+
+REST_SESSION_SRCPORT = 'source_port'
+REST_SESSION_SRCIP = 'source_ip'
+REST_SESSION_RRIP = 'request_router_ip'
+REST_SESSION_SEIP = 'service_engine_ip'
+REST_SESSION_STATE = 'state'
+REST_SESSION_URI = 'request_uri'
 
 PRIORITY_VLAN_SHIFT = 1000
 PRIORITY_NETMASK_SHIFT = 32
@@ -289,6 +298,11 @@ class RestRouterAPI(app_manager.RyuApp):
                        requirements=requirements,
                        action='delete_vlan_data',
                        conditions=dict(method=['DELETE']))
+
+        path = '/cdn/session/{switch_id}'
+        mapper.connect('router', path, controller=RouterController,
+                       action='get_sess_data',
+                       conditions=dict(method=['GET']))
 
     @set_ev_cls(dpset.EventDP, dpset.DPSET_EV_DISPATCHER)
     def datapath_handler(self, ev):
@@ -452,6 +466,12 @@ class RouterController(ControllerBase):
         return self._access_router(switch_id, VLANID_NONE,
                                    'get_rr_data', req.body)
 
+    # GET /cdn/session/{switch_id}
+    @rest_command
+    def get_sess_data(self, req, switch_id, **kwargs):
+        return self._access_router(switch_id, VLANID_NONE,
+                                   'get_sess_data', req.body)
+
     def _access_router(self, switch_id, vlan_id, func, rest_param):
         rest_message = []
         routers = self._get_router(switch_id)
@@ -477,7 +497,6 @@ class RouterController(ControllerBase):
             return routers
         else:
             raise NotFoundError(switch_id=switch_id)
-
 
 class Router(dict):
     def __init__(self, dp, logger):
@@ -620,6 +639,16 @@ class Router(dict):
         return {REST_SWITCHID: self.dpid_str,
                 REST_COMMAND_RESULT: msgs}
 
+    def get_sess_data(self, vlan_id, dummy1, dummy2):
+        vlan_routers = self._get_vlan_router(vlan_id)
+        if vlan_routers:
+            msgs = [vlan_router.get_sess_data() for vlan_router in vlan_routers]
+        else:
+            msgs = [{REST_SWITCHID: vlan_id}]
+
+        return {REST_SWITCHID: self.dpid_str,
+                REST_NW: msgs}
+
     def delete_data(self, vlan_id, param, waiters):
         msgs = []
         vlan_routers = self._get_vlan_router(vlan_id)
@@ -664,7 +693,6 @@ class Router(dict):
                 hub.sleep(1)
 
             hub.sleep(CHK_ROUTING_TBL_INTERVAL)
-
 
 class VlanRouter(object):
     def __init__(self, vlan_id, dp, port_data, logger):
@@ -735,6 +763,7 @@ class VlanRouter(object):
         address_data = self._get_address_data()
         routing_data = self._get_routing_data()
         cdn_routing_data = self._get_cdn_routing_data()
+        request_routers_data = self._get_cdn_request_routers_data()
 
         data = {}
         if address_data[REST_ADDRESS]:
@@ -743,8 +772,16 @@ class VlanRouter(object):
             data.update(routing_data)
         if cdn_routing_data[REST_CDN_ROUTE]:
             data.update(cdn_routing_data)
+        if request_routers_data[REST_REQUEST_ROUTER]:
+            data.update(request_routers_data)
 
         return self._response(data)
+
+    def get_sess_data(self):
+        sessions = self._get_sessions()
+        #TODO do some magic here to check it
+        return self._response(sessions)
+
 
     def _get_address_data(self):
         address_data = []
@@ -777,6 +814,36 @@ class VlanRouter(object):
                     REST_CDN_SE: seip}
             routing_data.append(data)
         return {REST_CDN_ROUTE: routing_data}
+
+    def _get_cdn_request_routers_data(self):
+        request_routers = []
+        for key, value in self.request_routers.items():
+            data = {REST_REQUEST_ROUTER_ID: key,
+                    REST_REQUEST_ROUTER: value}
+            request_routers.append(data)
+        return {REST_REQUEST_ROUTER: request_routers}
+
+
+# REST_SESSION_SRCPORT = 'source_port'
+# REST_SESSION_SRCIP = 'source_ip'
+# REST_SESSION_RRIP = 'request_router_ip'
+# REST_SESSION_SEIP = 'service_engine_ip'
+# REST_SESSION_STATE = 'state'
+# REST_SESSION_URI = 'request_uri'
+
+    def _get_sessions(self):
+        sessions = []
+        for sess in self.sessions:
+            data = {REST_SESSION_SRCPORT: sess.getsrcPort(),
+                    REST_SESSION_SRCIP: sess.getsrcIP(),
+                    REST_SESSION_RRIP: sess.getRequestRouterIP(),
+                    REST_SESSION_SEIP: sess.getServiceEngineIP(),
+                    REST_SESSION_URI: sess.getreqUri(),
+                    REST_SESSION_STATE: sess.getState()
+            }
+            sessions.append(data)
+        #TODO read all sessions and make it a json format
+        return {REST_SESSIONS: sessions}
 
     def set_data(self, data):
         details = None
@@ -1087,9 +1154,16 @@ class VlanRouter(object):
             self._packetin_arp(msg, header_list)
             return
 
+        for heh in header_list:
+            print heh
+
         if IPV4 in header_list:
+            print header_list[IPV4]
             rt_ports = self.address_data.get_default_gw()
-            rr_ports = self.request_routers
+            rr_ports = []
+            for reqrouters in self.request_routers.values():
+                rr_ports.append(reqrouters)
+            print rr_ports
             if header_list[IPV4].dst in rt_ports:
                 # Packet to router's port.
                 if ICMP in header_list:
@@ -1099,7 +1173,7 @@ class VlanRouter(object):
                 elif TCP in header_list or UDP in header_list:
                     self._packetin_tcp_udp(msg, header_list)
                     return
-            elif header_list[IPV4].dst in rr_ports.keys():
+            elif header_list[IPV4].dst in rr_ports:
                 self.manage_cdncomm(msg)
             elif header_list[IPV4].dst in self.sessions:
                     if TCP in header_list and header_list[TCP].dst_port in self.sessions[header_list[IPV4].dst]:
@@ -1396,6 +1470,7 @@ class VlanRouter(object):
         return ipd.src, tcpd.src_port
 
     def manage_cdncomm(self, msg):
+        print 'skocil som do funkcie'
         pkt = packet.Packet(array.array('B', msg.data))
         datapath = msg.datapath
         dpid = datapath.id
@@ -1409,7 +1484,7 @@ class VlanRouter(object):
         dst_ip = ipv4dat.dst
 
         tcpdat = pkt.get_protocol(tcp.tcp)
-
+        print 'parsujem'
         # Parsing of packet and getting payload
         for p in pkt:
             if isinstance(p, array.ArrayType):
@@ -1421,8 +1496,14 @@ class VlanRouter(object):
         except NameError:
             payload = None
 
+        print 'sparsovane'
+
+        print tcpdat
         # SYN IS SET, MEANS WE ARE DECLARING A NEW SESSION AND STORE THE ORIGINAL PACKET. SENDING A SYN ACK RESPONSE
+
+        print tcpdat.bits & 0x2
         if tcpdat.bits & 0x2:
+            print 'syn recv sendin ack'
             sess = Session(src_ip, tcpdat.src_port, pkt, dst_ip, in_port)
             if src_ip in self.sessions:
                 self.sessions[src_ip][tcpdat.src_port] = sess
@@ -1437,7 +1518,9 @@ class VlanRouter(object):
             actions = [parser.OFPActionOutput(in_port)]
             out = parser.OFPPacketOut(datapath=datapath, buffer_id=ofproto.OFP_NO_BUFFER,
                                       in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=data)
+            print 'to datapath'
             datapath.send_msg(out)
+            print 'wors'
             sess.setState(Session.SYNACKSENT)
             return
 
@@ -1467,7 +1550,6 @@ class VlanRouter(object):
                         sess.setPayload(payload)
 
                         #TODO get se ip from the routers cdn routing table
-                        #seip, semac = self.cdn.getSeForIP(sess.srcip)
                         route = self.cdn_routing_table.get_data(src_ip=src_ip)
                         seip = route.se_ip
                         if seip not in self.serviceengines.keys():
