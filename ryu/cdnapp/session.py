@@ -4,6 +4,8 @@ from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
 from ryu.lib.packet import tcp
 from ryu.lib.packet import ipv4
+import datetime
+import array
 
 
 class Session:
@@ -38,6 +40,7 @@ class Session:
         self.synackpkt = None
         self.clientsrcMac = None
         self.inport = inport
+        self.sesstime = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.state = self.SYNRECV
 
     #This function is used to generate a SYN, ACK response to a initial SYN request.
@@ -110,6 +113,37 @@ class Session:
 
         return pkt
 
+    def generateHTTPGETpkt(self):
+        ipget = self.httpgetpkt.get_protocol(ipv4.ipv4)
+        tcpget = self.httpgetpkt.get_protocol(tcp.tcp)
+
+        for p in self.synackpkt:
+            if p.protocol_name == 'ethernet':
+                e = ethernet.ethernet(p.src, p.dst)
+            if p.protocol_name == 'ipv4':
+                ip = ipv4.ipv4(4, 5, p.tos, 0, ipget.identification, ipget.flags, 0, ipget.ttl, ipget.proto, 0, p.dst, p.src)
+            if p.protocol_name == 'tcp':
+                tcpd = tcp.tcp(p.dst_port, p.src_port, p.ack, p.seq+2, 0, 1 << 4, tcpget.window_size, 0, 0)
+
+
+        pkt = packet.Packet()
+        pkt.add_protocol(e)
+        pkt.add_protocol(ip)
+        pkt.add_protocol(tcpd)
+        for p in self.httpgetpkt:
+            if isinstance(p, array.ArrayType):
+                payload = str(bytearray(p))
+        # Make sure variable payload is set
+        try:
+            payload
+        except NameError:
+            payload = None
+        pkt.add_protocol(payload)
+        pkt.serialize()
+
+        return pkt
+
+
     # This function is used to save the incoming ACK packet for our SYN, ACK for later use
     def saveACKpkt(self, pkt):
         self.ackpkt = pkt
@@ -164,3 +198,6 @@ class Session:
 
     def getreqURI(self):
         return self.requesturi
+
+    def getSessionTime(self):
+        return self.sesstime

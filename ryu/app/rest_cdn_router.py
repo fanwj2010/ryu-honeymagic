@@ -59,8 +59,6 @@ from ryu.app.VlanRouterUtils import PortData, Port, AddressData, Address, Routin
 from ryu.app.VlanRouterOFCTL import OfCtl, OfCtl_after_v1_2, OfCtl_v1_0, OfCtl_v1_2, OfCtl_v1_3
 
 import array
-import pprint
-
 
 # =============================
 #          REST API
@@ -175,6 +173,7 @@ REST_SESSION_RRIP = 'request_router_ip'
 REST_SESSION_SEIP = 'service_engine_ip'
 REST_SESSION_STATE = 'state'
 REST_SESSION_URI = 'request_uri'
+REST_SESSION_TIME = 'session_timestamp'
 
 PRIORITY_VLAN_SHIFT = 1000
 PRIORITY_NETMASK_SHIFT = 32
@@ -512,7 +511,7 @@ class Router(dict):
         cookie = COOKIE_DEFAULT_ID
 
         # Set SW config: TTL error packet in (for OFPv1.2/1.3)
-        #This somehow not works on ofsoftswitch TODO why, cuz its shit
+        #This somehow not works on ofsoftswitch
         #ofctl.set_sw_config_for_ttl()
 
         # Set flow: ARP handling (packet in)
@@ -647,7 +646,7 @@ class Router(dict):
             msgs = [{REST_SWITCHID: vlan_id}]
 
         return {REST_SWITCHID: self.dpid_str,
-                REST_NW: msgs}
+                REST_SESSIONS: msgs}
 
     def delete_data(self, vlan_id, param, waiters):
         msgs = []
@@ -779,7 +778,6 @@ class VlanRouter(object):
 
     def get_sess_data(self):
         sessions = self._get_sessions()
-        #TODO do some magic here to check it
         return self._response(sessions)
 
 
@@ -823,27 +821,22 @@ class VlanRouter(object):
             request_routers.append(data)
         return {REST_REQUEST_ROUTER: request_routers}
 
-
-# REST_SESSION_SRCPORT = 'source_port'
-# REST_SESSION_SRCIP = 'source_ip'
-# REST_SESSION_RRIP = 'request_router_ip'
-# REST_SESSION_SEIP = 'service_engine_ip'
-# REST_SESSION_STATE = 'state'
-# REST_SESSION_URI = 'request_uri'
-
     def _get_sessions(self):
-        sessions = []
-        for sess in self.sessions:
-            data = {REST_SESSION_SRCPORT: sess.getsrcPort(),
-                    REST_SESSION_SRCIP: sess.getsrcIP(),
-                    REST_SESSION_RRIP: sess.getRequestRouterIP(),
-                    REST_SESSION_SEIP: sess.getServiceEngineIP(),
-                    REST_SESSION_URI: sess.getreqUri(),
-                    REST_SESSION_STATE: sess.getState()
-            }
-            sessions.append(data)
-        #TODO read all sessions and make it a json format
-        return {REST_SESSIONS: sessions}
+        res = []
+        for key, ips in self.sessions.items():
+            for key2, sess in ips.items():
+
+                data = {REST_SESSION_SRCPORT: sess.getsrcPort(),
+                        REST_SESSION_SRCIP: sess.getsrcIP(),
+                        REST_SESSION_RRIP: sess.getRequestRouterIP(),
+                        REST_SESSION_SEIP: sess.getServiceEngineIP(),
+                        REST_SESSION_URI: sess.getreqURI(),
+                        REST_SESSION_STATE: sess.getState(),
+                        REST_SESSION_TIME: sess.getSessionTime()
+                }
+                res.append(data)
+
+        return res
 
     def set_data(self, data):
         details = None
@@ -1154,16 +1147,11 @@ class VlanRouter(object):
             self._packetin_arp(msg, header_list)
             return
 
-        for heh in header_list:
-            print heh
-
         if IPV4 in header_list:
-            print header_list[IPV4]
             rt_ports = self.address_data.get_default_gw()
             rr_ports = []
             for reqrouters in self.request_routers.values():
                 rr_ports.append(reqrouters)
-            print rr_ports
             if header_list[IPV4].dst in rt_ports:
                 # Packet to router's port.
                 if ICMP in header_list:
@@ -1250,8 +1238,6 @@ class VlanRouter(object):
                 self.logger.info(log_msg, srcip, dstip, extra=self.sw_id)
 
                 packet_list = self.packet_buffer.get_data(src_ip)
-                #TODO save if it is a service engine to make sure we have its mac address
-                #TODO check, test
                 if src_ip in self.serviceengines.keys():
                     self.serviceengines[src_ip] = header_list[ETHERNET].src
 
@@ -1470,7 +1456,6 @@ class VlanRouter(object):
         return ipd.src, tcpd.src_port
 
     def manage_cdncomm(self, msg):
-        print 'skocil som do funkcie'
         pkt = packet.Packet(array.array('B', msg.data))
         datapath = msg.datapath
         dpid = datapath.id
@@ -1484,7 +1469,6 @@ class VlanRouter(object):
         dst_ip = ipv4dat.dst
 
         tcpdat = pkt.get_protocol(tcp.tcp)
-        print 'parsujem'
         # Parsing of packet and getting payload
         for p in pkt:
             if isinstance(p, array.ArrayType):
@@ -1496,14 +1480,10 @@ class VlanRouter(object):
         except NameError:
             payload = None
 
-        print 'sparsovane'
 
-        print tcpdat
         # SYN IS SET, MEANS WE ARE DECLARING A NEW SESSION AND STORE THE ORIGINAL PACKET. SENDING A SYN ACK RESPONSE
 
-        print tcpdat.bits & 0x2
         if tcpdat.bits & 0x2:
-            print 'syn recv sendin ack'
             sess = Session(src_ip, tcpdat.src_port, pkt, dst_ip, in_port)
             if src_ip in self.sessions:
                 self.sessions[src_ip][tcpdat.src_port] = sess
@@ -1518,9 +1498,7 @@ class VlanRouter(object):
             actions = [parser.OFPActionOutput(in_port)]
             out = parser.OFPPacketOut(datapath=datapath, buffer_id=ofproto.OFP_NO_BUFFER,
                                       in_port=ofproto.OFPP_CONTROLLER, actions=actions, data=data)
-            print 'to datapath'
             datapath.send_msg(out)
-            print 'wors'
             sess.setState(Session.SYNACKSENT)
             return
 
@@ -1536,6 +1514,7 @@ class VlanRouter(object):
                         print 'ACK packet saved for our session. Waiting for HTTP GET'
                         return
                     else:
+                        sess.setState(Session.CDNERROR)
                         raise badStateException('Received ACK with payload in state ' + sess.getState())
                         return
 
@@ -1549,14 +1528,12 @@ class VlanRouter(object):
                         sess.saveHTTPGETpkt(pkt)
                         sess.setPayload(payload)
 
-                        #TODO get se ip from the routers cdn routing table
                         route = self.cdn_routing_table.get_data(src_ip=src_ip)
                         seip = route.se_ip
                         if seip not in self.serviceengines.keys():
                             self.serviceengines[seip] = ""
                         sess.setServiceEngineIP(seip)
                         synpkt = sess.generateSYNpkt()
-                        #qwerty
                         matchip, matchport = self.prepare_backward_match_action(synpkt, parser, ofproto)
                         self._set_cdncomm_backward_communication_flow(matchip, matchport)
                         data = synpkt.data
@@ -1569,13 +1546,12 @@ class VlanRouter(object):
 
                         return
                     else:
-                        print 'about to raise badstateexception'
+                        sess.setState(Session.CDNERROR)
                         raise badStateException('We did not received ACK with payload in state ' + sess.getState())
 
             except Exception:
                 print Exception.message
                 traceback.print_exc(file=sys.stdout)
-                #TODO update state
 
     def manage_backward_cdncomm(self, msg):
         pkt = packet.Packet(array.array('B', msg.data))
@@ -1603,7 +1579,6 @@ class VlanRouter(object):
                 rrip = sess.getRequestRouterIP()
                 seip = sess.getServiceEngineIP()
 
-                #TODO test situation, when service engine is on this router
                 address = self.address_data.get_data(ip=seip)
                 if address is not None:
                     gwmac = self.serviceengines[seip]
@@ -1627,11 +1602,10 @@ class VlanRouter(object):
                 self.ofctl.set_cdncomm_from_se_joining_flow(0, priority, ether.ETH_TYPE_IP, sess.srcip, sess.srcport, 6,
                                     tcpseq, rrip, in_port_mac_client, sess.getClientMac(), sess.getClientInPort())
 
-                #TODO send HTTP GET
+                httpgetpkt = sess.generateHTTPGETpkt()
+                self.ofctl.send_packet_out(in_port, in_port, httpgetpkt.data)
+
                 return
-
-
-
 
 def ip_addr_aton(ip_str, err_msg=None):
     try:
