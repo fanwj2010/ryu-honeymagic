@@ -36,6 +36,7 @@ class Session:
         self.serviceEngineIP = None
         self.ackpkt = None
         self.requesturi = None
+        self.host = None
         self.httpgetpkt = None
         self.synackpkt = None
         self.clientsrcMac = None
@@ -160,6 +161,9 @@ class Session:
     def setRequestURI(self, uri):
         self.requesturi = uri
 
+    def setHost(self, host):
+        self.host = host
+
     def setPayload(self, payload):
         self.payload = payload
 
@@ -201,3 +205,6 @@ class Session:
 
     def getSessionTime(self):
         return self.sesstime
+
+    def getHost(self):
+        return self.host

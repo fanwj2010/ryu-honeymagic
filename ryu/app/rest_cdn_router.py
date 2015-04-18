@@ -174,6 +174,7 @@ REST_SESSION_SEIP = 'service_engine_ip'
 REST_SESSION_STATE = 'state'
 REST_SESSION_URI = 'request_uri'
 REST_SESSION_TIME = 'session_timestamp'
+REST_SESSION_HOST = 'host'
 
 PRIORITY_VLAN_SHIFT = 1000
 PRIORITY_NETMASK_SHIFT = 32
@@ -832,7 +833,8 @@ class VlanRouter(object):
                         REST_SESSION_SEIP: sess.getServiceEngineIP(),
                         REST_SESSION_URI: sess.getreqURI(),
                         REST_SESSION_STATE: sess.getState(),
-                        REST_SESSION_TIME: sess.getSessionTime()
+                        REST_SESSION_TIME: sess.getSessionTime(),
+                        REST_SESSION_HOST: sess.getHost()
                 }
                 res.append(data)
 
@@ -1521,7 +1523,13 @@ class VlanRouter(object):
                 if sess.getState() == Session.ACKRECV:
                     # We should catch HTTP GET now
                     if payload is not None:
-                        request = payload.split('\n', 1)[0]
+                        payloadlines = payload.split('\n')
+                        request = payloadlines[0]
+                        for lns in payloadlines:
+                            lndata = lns.split(':');
+                            if lndata[0]=='Host' or lndata[0]=='host' or lndata[0]=='HOST':
+                                sess.setHost(lndata[1])
+
                         print 'Request is ', request
                         sess.setState(Session.HTTPGETRECV)
                         sess.setRequestURI(request)
