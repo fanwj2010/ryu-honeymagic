@@ -1505,7 +1505,7 @@ class VlanRouter(object):
             return
 
         # ACK IS SET
-        if tcpdat.bits & 1 << 4:
+        if tcpdat.bits & 1 << 4 and tcpdat.bits & 1 != 1:
             try:
                 sess = self.sessions[src_ip][tcpdat.src_port]
                 if sess.getState() == Session.SYNACKSENT:
@@ -1554,12 +1554,16 @@ class VlanRouter(object):
 
                         return
                     else:
-                        sess.setState(Session.CDNERROR)
-                        raise badStateException('We did not received ACK with payload in state ' + sess.getState())
+                        pass
+                        #sess.setState(Session.CDNERROR)
+                        #raise badStateException('We did not received ACK with payload in state ' + sess.getState())
 
             except Exception:
                 print Exception.message
                 traceback.print_exc(file=sys.stdout)
+
+            #FIN IS SET, This means the session was not established and no HTTP get received, delete the session
+
 
     def manage_backward_cdncomm(self, msg):
         pkt = packet.Packet(array.array('B', msg.data))
