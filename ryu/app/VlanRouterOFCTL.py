@@ -402,7 +402,6 @@ class OfCtl_after_v1_2(OfCtl):
                       nw_dst=nw_dst, dst_mask=dst_mask,
                       idle_timeout=idle_timeout, actions=actions)
 
-    #TODO check if flow is added for the request router
     #THOMAS, added new function for adding packetin flow for the request routers
     def set_request_router_packetin_flow(self, cookie, priority, eth_type=ether.ETH_TYPE_IP, dst_ip=0, ip_proto=6, tcp_dst=80):
         ofp = self.dp.ofproto

@@ -284,6 +284,11 @@ class RestRouterAPI(app_manager.RyuApp):
                        action='get_rr_data',
                        condition=dict(method=['GET']))
 
+        path = '/cdn/session/{switch_id}'
+        mapper.connect('router', path, controller=RouterController,
+                       action='get_sess_data',
+                       conditions=dict(method=['GET']))
+
         # For vlan data
         path = '/router/{switch_id}/{vlan_id}'
         mapper.connect('router', path, controller=RouterController,
@@ -299,10 +304,6 @@ class RestRouterAPI(app_manager.RyuApp):
                        action='delete_vlan_data',
                        conditions=dict(method=['DELETE']))
 
-        path = '/cdn/session/{switch_id}'
-        mapper.connect('router', path, controller=RouterController,
-                       action='get_sess_data',
-                       conditions=dict(method=['GET']))
 
     @set_ev_cls(dpset.EventDP, dpset.DPSET_EV_DISPATCHER)
     def datapath_handler(self, ev):
@@ -1616,6 +1617,7 @@ class VlanRouter(object):
 
                 httpgetpkt = sess.generateHTTPGETpkt()
                 self.ofctl.send_packet_out(in_port, in_port, httpgetpkt.data)
+                sess.setState(Session.SESSIONSJOINED)
 
                 return
 
