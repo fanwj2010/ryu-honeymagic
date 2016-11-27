@@ -484,8 +484,8 @@ def match_to_str(ofmatch):
             ofproto_v1_3.OXM_OF_PBB_ISID: 'pbb_isid',
             ofproto_v1_3.OXM_OF_TUNNEL_ID: 'tunnel_id',
             ofproto_v1_3.OXM_OF_IPV6_EXTHDR: 'ipv6_exthdr',
-            ofproto_v1_3.OXM_OF_TCP_SEQ: 'tcp_seq',
-            ofproto_v1_3.OXM_OF_TCP_ACK: 'tcp_ack'}
+            ofproto_v1_3.OXM_OF_TCP_SEQ_DIFF: 'tcp_seq_diff',
+            ofproto_v1_3.OXM_OF_TCP_ACK_DIFF: 'tcp_ack_diff'}
 
     match = {}
     for match_field in ofmatch.fields:

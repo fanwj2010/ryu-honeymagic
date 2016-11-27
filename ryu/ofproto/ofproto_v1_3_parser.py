@@ -2006,7 +2006,7 @@ class MTIPv6ExtHdr(OFPMatchField):
         self.mask = mask
 
 
-@OFPMatchField.register_field_header([ofproto.OXM_OF_TCP_SEQ])
+@OFPMatchField.register_field_header([ofproto.OXM_OF_TCP_SEQ_DIFF])
 class MTTCPSeq(OFPMatchField):
     pack_str = '!I'
 
@@ -2015,7 +2015,7 @@ class MTTCPSeq(OFPMatchField):
         self.value = value
         self.mask = mask
 
-@OFPMatchField.register_field_header([ofproto.OXM_OF_TCP_ACK])
+@OFPMatchField.register_field_header([ofproto.OXM_OF_TCP_ACK_DIFF])
 class MTTCPAck(OFPMatchField):
     pack_str = '!I'
 

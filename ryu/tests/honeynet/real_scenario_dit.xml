@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+~~~~~~~~~~~~~~~~~~~~
+VNX honeypots real test scenarios
+~~~~~~~~~~~~~~~~~~~~
+
+Name:        simple_ubuntu-gui
+Description: Just one Ubuntu virtual machine with GUI connected to a Network named Net0 with address 10.0.0.5. 
+             The host has an interface in Net0 with address 10.0.0.1  
+             This simple scenario is supposed to be used for testing the different 
+             types of virtual machines supported by VNX. You can start several simple_*.xml
+             scenarios and test the connectivity among virtual machines and the host, as all
+             scenarios share the same "Net0" network.  
+
+This file is part of the Virtual Networks over LinuX (VNX) Project distribution. 
+(www: http://www.dit.upm.es/vnx - e-mail: vnx@dit.upm.es) 
+
+Departamento de Ingenieria de Sistemas Telematicos (DIT)
+Universidad Politecnica de Madrid
+SPAIN
+-->
+
+<vnx xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:noNamespaceSchemaLocation="/usr/share/xml/vnx/vnx-2.00.xsd">
+  <global>
+    <version>2.0</version>
+    <scenario_name>real_scenario_dit</scenario_name>
+    <automac offset="5"/>
+    <vm_mgmt type="none" />
+    <vm_defaults>
+	    <console id="0" display="yes"/>
+	    <console id="1" display="yes"/>
+    </vm_defaults>
+  </global>
+    
+  <net name="br0" mode="virtual_bridge" />
+  
+  <!-- NODES -->
+  <vm name="vm1" type="lxc" arch="x86_64">
+    <filesystem type="cow">/usr/share/vnx/filesystems/rootfs_lxc_MIH</filesystem>
+    <mem>512M</mem>
+     <if id="1" net="br0">
+      <ipv4>138.4.0.102/25</ipv4>
+      <dns>138.4.2.10</dns>
+      <dns>138.4.2.32</dns>
+    </if>
+    <route type="ipv4" gw="138.4.0.1">default</route>
+    <exec seq="start-amun" type="verbatim" ostype="system">python /opt/amun/amun_server.py</exec>
+  </vm>
+  
+  <vm name="vm2" type="libvirt" subtype="kvm" os="linux">
+    <filesystem type="cow">/usr/share/vnx/filesystems/rootfs_honeydrive</filesystem>
+    <mem>512M</mem>
+    <console id="0" display="yes"/>
+    <console id="1" display="yes"/>
+    <if id="1" net="br0">
+      <ipv4>138.4.0.103/25</ipv4>
+      <dns>138.4.2.10</dns>
+      <dns>138.4.2.32</dns>
+    </if>
+    <route type="ipv4" gw="138.4.0.1">default</route>
+    <exec seq="start-dionaea" type="verbatim" ostype="system">/opt/dionaea/bin/dionaea -r /opt/dionaea -w /opt/dionaea</exec>
+  </vm>
+
+</vnx>
+

@@ -1,0 +1,41 @@
+#!/bin/bash
+
+watch \
+'
+echo "Flow table of Net1 Open vSwitch:"; 
+echo "--------------------------------"; 
+ovs-ofctl dump-flows Net1 --protocols OpenFlow13
+
+
+echo "--------------------------------"; 
+echo "--------------------------------"; 
+echo "--------------------------------"; 
+echo "--------------------------------"; 
+echo "Net1 openvswitch:"; 
+echo "-----------------"; 
+ovs-vsctl show; 
+echo "--";  
+
+
+echo "Ofsoftswitches processes:"; 
+echo "-------------------------"; 
+ps uax | grep ofdatapath | grep -v grep
+ps uax | grep ofprotocol | grep -v grep
+echo "--"; 
+echo "--"; 
+
+echo "veth interfaces:"; 
+echo "----------------"; 
+ip link show Net1-MIH
+ip link show MIH-ssp
+echo "--"; 
+echo "--"; 
+
+
+echo "Flow table of MIH-ssp HIH-ssp OfSoftSwitch:"; 
+echo "----------------------------------"; 
+dpctl tcp:10.1.10.1:6681 stats-flow table=0
+echo "--"; 
+echo "--"; 
+'
+
