@@ -12,8 +12,8 @@
   xsi:noNamespaceSchemaLocation="/usr/share/xml/vnx/vnx-2.00.xsd">
   <global>
     <version>2.0</version>
-    <scenario_name>honeymagic_simple_test</scenario_name>
-    <automac/>
+    <scenario_name>honeymagic_simple_test_frontend_Meta</scenario_name>
+    <automac offset="1"/>
     <vm_mgmt type="private" network="10.250.0.0" mask="24" offset="12">
        <host_mapping />
     </vm_mgmt> 
@@ -33,23 +33,41 @@
   <!--net name="Net1" mode="openvswitch" hwaddr="00:00:00:00:00:01" controller="tcp:10.1.0.1:6633" of_version="OpenFlow13"/-->
   <net name="MgmtNet1" mode="virtual_bridge"/>
 
-  <vm name="C" type="lxc" arch="x86_64">
+  <!--attackers-->
+  <vm name="attacker-lxc" type="lxc" arch="x86_64">
     <filesystem type="cow">/usr/share/vnx/filesystems/rootfs_lxc</filesystem>
-    <if id="1" net="Net0">
+    <if id="1" net="Net0">  
       <ipv4>10.1.0.2/24</ipv4>
     </if>
     <route type="ipv4" gw="10.1.0.1">default</route>    
   </vm>
+ 
+  <vm name="C" type="lxc" arch="x86_64">
+    <filesystem type="cow">/usr/share/vnx/filesystems/rootfs_lxc_MIH</filesystem>
+    <if id="1" net="Net0">      
+      <ipv4>10.1.0.3/24</ipv4>      
+    </if>
+    <route type="ipv4" gw="10.1.0.1">default</route>  
+  </vm>
 
-  <!--attackers-->
-  <vm name="Kali" type="libvirt" subtype="kvm" os="linux" exec_mode="sdisk">
-    <filesystem type="cow">/usr/share/vnx/filesystems/rootfs_kali</filesystem>
+  <!--vm name="attacker-kvm" type="libvirt" subtype="kvm" os="linux" exec_mode="sdisk">
+    <filesystem type="cow">/usr/share/vnx/filesystems/rootfs_ubuntu</filesystem>
     <mem>512M</mem>
     <if id="1" net="Net0">
       <ipv4>10.1.0.3/24</ipv4>
     </if> 
     <route type="ipv4" gw="10.1.0.1">default</route>    
+  </vm-->
+
+  <vm name="attacker-kvm" type="libvirt" subtype="kvm" os="linux" exec_mode="sdisk">
+    <filesystem type="cow">/usr/share/vnx/filesystems/rootfs_ubuntu_nmap_msf</filesystem>
+    <mem>512M</mem>
+    <if id="1" net="Net0">
+      <ipv4>10.1.0.4/24</ipv4>
+    </if> 
+    <route type="ipv4" gw="10.1.0.1">default</route>    
   </vm>
+
 
   <!--router-->
   <vm name="r1" type="lxc" arch="x86_64">
@@ -67,19 +85,7 @@
 
   
   <!--honeypots-->
-  <vm name="MIH" type="lxc" arch="x86_64">
-    <filesystem type="cow">/usr/share/vnx/filesystems/rootfs_lxc_MIH</filesystem>
-    <if id="1" net="Net1">
-      <mac>02:fd:00:00:02:01</mac>
-      <ipv4>10.1.1.2/24</ipv4>      
-    </if>
-    <route type="ipv4" gw="10.1.1.1">default</route>  
-    <exec seq="start-amun" type="verbatim" ostype="system">python /opt/amun/amun_server.py</exec>
-  </vm>
-
-  
-
-  <vm name="HIH" type="libvirt" subtype="kvm" os="linux" exec_mode="sdisk">
+  <vm name="MIH" type="libvirt" subtype="kvm" os="linux" exec_mode="sdisk">
     <filesystem type="cow">/usr/share/vnx/filesystems/rootfs_metasploitable2</filesystem>
     <mem>256M</mem>
     <if id="1" net="Net1">
@@ -87,7 +93,16 @@
       <ipv4>10.1.1.2/24</ipv4>
     </if>
     <route type="ipv4" gw="10.1.1.1">default</route>  
-    <!--exec seq="start-www" type="verbatim" ostype="system">service apache2 start</exec-->
+  </vm>
+
+  <vm name="HIH" type="lxc" arch="x86_64">
+    <filesystem type="cow">/usr/share/vnx/filesystems/rootfs_lxc_MIH</filesystem>
+    <if id="1" net="Net1">
+      <mac>02:fd:00:00:02:01</mac>
+      <ipv4>10.1.1.2/24</ipv4>      
+    </if>
+    <route type="ipv4" gw="10.1.1.1">default</route>  
+    <!--exec seq="start-amun" type="verbatim" ostype="system">python /opt/amun/amun_server.py</exec-->
   </vm>
 
 
@@ -98,24 +113,6 @@
     <exec seq="on_boot" type="verbatim">
 
         mkdir -p log
-
-
-                # Create veth interfaces to connect Net1 to the MIH session processor (MIH-ssp)
-		# and disable IPv6 autoconfiguration on them
-		ip link add name Net1-MIH type veth peer name MIH-ssp
-		echo 1 > /proc/sys/net/ipv6/conf/Net1-MIH/disable_ipv6
-		echo 1 > /proc/sys/net/ipv6/conf/MIH-ssp/disable_ipv6
-
-		# Disconnect MIH server from Net1
-		ovs-vsctl del-port Net1 MIH-e1
-		# Connect Net1-MIH pipe extreme to Net1
-		ovs-vsctl add-port Net1 Net1-MIH
-
-		# Create s1-2 sdn session processor (MIH-ss) ofsoftswitch 
-		# with two interfaces: Net1-MIH and MIH-e1
-		ofdatapath --datapath-id=000000000004 --interfaces=MIH-ssp,MIH-e1 --pidfile=/usr/local/var/run/MIH-ssp.pid -D ptcp:6682 --no-slicing &gt; log/ofdatapath.log 2&gt;&amp;1
-		ofprotocol -D --pidfile=/usr/local/var/run/MIH-ssp-of.pid tcp:10.1.10.1:6682 tcp:10.1.10.1:6633 --log-file=log/ofprotocol.log &gt; /dev/null 2&gt;&amp;1
-
 
 
 
@@ -142,18 +139,14 @@
 
 		# Delete veth interfaces
 		ovs-vsctl del-port Net1 Net1-HIH
-                ovs-vsctl del-port Net1 Net1-MIH
+                
 		ip link delete Net1-HIH type veth
 		ip link delete HIH-ssp type veth
-                ip link delete Net1-MIH type veth
-		ip link delete MIH-ssp type veth
-
+                
 		# Kill HIH-ssp ofsoftswitch
 		kill -9 $(cat /usr/local/var/run/HIH-ssp.pid)
 		kill -9 $(cat /usr/local/var/run/HIH-ssp-of.pid)
-                # Kill MIH-ssp ofsoftswitch
-		kill -9 $(cat /usr/local/var/run/MIH-ssp.pid)
-		kill -9 $(cat /usr/local/var/run/MIH-ssp-of.pid)                
+                              
 
 		
 
